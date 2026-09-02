@@ -4,7 +4,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
-export default function AppSidebar() {
+import {
+  canAccessPath,
+  normalizeRole,
+  type Business360Role,
+} from "@/lib/role-permissions";
+
+export default function AppSidebar({
+  role,
+}: {
+  role: Business360Role | string;
+}) {
+  const normalizedRole = normalizeRole(role);
+
   return (
     <aside className="hidden w-64 flex-col border-r border-gray-200 bg-white lg:flex">
       <div className="flex h-16 items-center border-b border-gray-200 px-6">
@@ -21,31 +33,49 @@ export default function AppSidebar() {
 
       <nav className="flex-1 overflow-y-auto p-4">
         <NavSection title="Workspace">
-          <NavItem href="/dashboard" label="Dashboard" />
-          <NavItem href="/customers" label="Customers" />
-          <NavItem href="/products" label="Products" />
+          <RoleNavItem role={normalizedRole} href="/dashboard" label="Dashboard" />
+          <RoleNavItem role={normalizedRole} href="/customers" label="Customers" />
+          <RoleNavItem role={normalizedRole} href="/products" label="Products" />
         </NavSection>
 
         <NavSection title="Operations">
-          <NavItem href="/quotations" label="Quotations" />
-          <NavItem href="/sales" label="Sales" />
-          <NavItem href="/inventory" label="Inventory" />
-          <NavItem href="/purchase" label="Purchase" />
-          <NavItem href="/supplier-bills" label="Supplier Bills" />
-          <NavItem href="/expenses" label="Expenses" />
+          <RoleNavItem role={normalizedRole} href="/quotations" label="Quotations" />
+          <RoleNavItem role={normalizedRole} href="/sales" label="Sales" />
+          <RoleNavItem role={normalizedRole} href="/inventory" label="Inventory" />
+          <RoleNavItem role={normalizedRole} href="/purchase" label="Purchase" />
+          <RoleNavItem role={normalizedRole} href="/supplier-bills" label="Supplier Bills" />
+          <RoleNavItem role={normalizedRole} href="/expenses" label="Expenses" />
         </NavSection>
 
         <NavSection title="Insights">
-          <NavItem href="/reports" label="Reports" />
-          <NavItem href="/ai" label="AI Assistant" />
+          <RoleNavItem role={normalizedRole} href="/reports" label="Reports" />
+          <RoleNavItem role={normalizedRole} href="/ai" label="AI Assistant" />
         </NavSection>
       </nav>
 
-      <div className="border-t border-gray-200 p-4">
-        <NavItem href="/settings" label="Settings" />
-      </div>
+      {canAccessPath(normalizedRole, "/settings") && (
+        <div className="border-t border-gray-200 p-4">
+          <RoleNavItem role={normalizedRole} href="/settings" label="Settings" />
+        </div>
+      )}
     </aside>
   );
+}
+
+function RoleNavItem({
+  role,
+  href,
+  label,
+}: {
+  role: Business360Role;
+  href: string;
+  label: string;
+}) {
+  if (!canAccessPath(role, href)) {
+    return null;
+  }
+
+  return <NavItem href={href} label={label} />;
 }
 
 function NavSection({
@@ -61,9 +91,7 @@ function NavSection({
         {title}
       </div>
 
-      <div className="space-y-1">
-        {children}
-      </div>
+      <div className="space-y-1">{children}</div>
     </div>
   );
 }

@@ -278,7 +278,14 @@ export default function ExpensesClient() {
     [expenses]
   );
 
-  const monthlyPrefix = currentMonthPrefix();
+  const [monthlyPrefix, setMonthlyPrefix] =
+    useState("");
+
+  useEffect(() => {
+    setMonthlyPrefix(
+      currentMonthPrefix()
+    );
+  }, []);
 
   const thisMonthPosted = useMemo(
     () =>
@@ -1250,13 +1257,32 @@ function currentMonthPrefix() {
 }
 
 function monthLabel(prefix: string) {
-  const [year, month] = prefix.split("-");
-  const date = new Date(Number(year), Number(month) - 1, 1);
+  if (!prefix) {
+    return "Current Month";
+  }
 
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    year: "numeric",
-  });
+  const [year, month] =
+    prefix.split("-");
+
+  const monthNames = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+
+  const index =
+    Number(month) - 1;
+
+  return `${monthNames[index] || month} ${year}`;
 }
 
 function formatCurrencySummary(
