@@ -1,0 +1,32 @@
+@media print {
+  #receipt-toolbar {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  #payment-receipt {
+    width: 190mm !important;
+    max-width: 190mm !important;
+    min-height: 0 !important;
+    height: auto !important;
+    margin: 0 auto !important;
+    padding: 8mm 10mm !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+}
+
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
