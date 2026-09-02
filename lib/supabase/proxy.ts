@@ -7,6 +7,10 @@ import { canAccessPath, normalizeRole } from "../role-permissions";
 const PUBLIC_PREFIXES = [
   "/auth",
   "/login",
+];
+
+const SELF_AUTHORIZED_API_PREFIXES = [
+  "/api/ai",
   "/api/settings/users/invite",
 ];
 
@@ -52,8 +56,13 @@ export async function updateSession(request: NextRequest) {
     pathname === "/" ||
     PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 
+  const isSelfAuthorizedApi =
+    SELF_AUTHORIZED_API_PREFIXES.some((prefix) =>
+      pathname.startsWith(prefix)
+    );
+
   if (!user) {
-    if (isPublic) {
+    if (isPublic || isSelfAuthorizedApi) {
       return supabaseResponse;
     }
 
@@ -63,7 +72,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (isPublic) {
+  if (isPublic || isSelfAuthorizedApi) {
     return supabaseResponse;
   }
 
