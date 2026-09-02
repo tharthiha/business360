@@ -1333,6 +1333,188 @@ export default async function DashboardPage() {
     openPurchaseOrders.length +
     draftExpenses.length;
 
+  /*
+    ======================================
+    AI ACTION CENTER
+    ======================================
+  */
+
+  const aiAlerts: {
+    title: string;
+    description: string;
+    action: string;
+    href: string;
+    priority:
+      | "critical"
+      | "high"
+      | "medium"
+      | "info";
+  }[] = [];
+
+  if (
+    overdueInvoices.length >
+    0
+  ) {
+    aiAlerts.push({
+      title: `${overdueInvoices.length} overdue customer invoice${
+        overdueInvoices.length === 1
+          ? ""
+          : "s"
+      }`,
+      description:
+        "Customer balances are past due. Prioritize collection follow-up to protect cash flow.",
+      action:
+        "Review customer collections",
+      href: "/invoices",
+      priority: "critical",
+    });
+  }
+
+  if (
+    overdueSupplierBills.length >
+    0
+  ) {
+    aiAlerts.push({
+      title: `${overdueSupplierBills.length} overdue supplier bill${
+        overdueSupplierBills.length ===
+        1
+          ? ""
+          : "s"
+      }`,
+      description:
+        "Supplier balances are past due. Review payment timing and supplier commitments.",
+      action:
+        "Review supplier payables",
+      href: "/supplier-bills",
+      priority: "critical",
+    });
+  }
+
+  if (
+    outOfStockProducts.length >
+    0
+  ) {
+    aiAlerts.push({
+      title: `${outOfStockProducts.length} product${
+        outOfStockProducts.length ===
+        1
+          ? ""
+          : "s"
+      } out of stock`,
+      description:
+        "Sales may be blocked until stock is replenished. Prioritize items with active demand.",
+      action: "Open inventory",
+      href: "/inventory",
+      priority: "high",
+    });
+  }
+
+  if (
+    lowStockProducts.length >
+    0
+  ) {
+    aiAlerts.push({
+      title: `${lowStockProducts.length} low-stock product${
+        lowStockProducts.length === 1
+          ? ""
+          : "s"
+      }`,
+      description:
+        "Current stock is at or below minimum level. Consider replenishment before stockout.",
+      action: "Plan replenishment",
+      href: "/inventory",
+      priority: "high",
+    });
+  }
+
+  if (
+    pendingDeliveryOrders.length >
+    0
+  ) {
+    aiAlerts.push({
+      title: `${pendingDeliveryOrders.length} confirmed order${
+        pendingDeliveryOrders.length ===
+        1
+          ? ""
+          : "s"
+      } pending delivery`,
+      description:
+        "Confirmed customer orders are not yet fulfilled. Review delivery readiness and stock availability.",
+      action:
+        "Review sales orders",
+      href: "/sales",
+      priority: "medium",
+    });
+  }
+
+  if (
+    draftExpenses.length >
+    0
+  ) {
+    aiAlerts.push({
+      title: `${draftExpenses.length} draft expense${
+        draftExpenses.length === 1
+          ? ""
+          : "s"
+      } waiting`,
+      description:
+        "Draft expenses are not yet posted and may be missing from current-period profitability.",
+      action: "Review expenses",
+      href: "/expenses",
+      priority: "medium",
+    });
+  }
+
+  if (
+    primary &&
+    primary.netProfit < 0
+  ) {
+    aiAlerts.push({
+      title:
+        "Current month is operating at a net loss",
+      description: `${moneySigned(
+        primary.netProfit,
+        primary.currency
+      )} net profit for the current month. Review margin and operating expenses.`,
+      action:
+        "Open financial reports",
+      href: "/reports",
+      priority: "critical",
+    });
+  } else if (
+    primary &&
+    primary.cashFlow < 0
+  ) {
+    aiAlerts.push({
+      title:
+        "Cash flow is negative this month",
+      description: `${moneySigned(
+        primary.cashFlow,
+        primary.currency
+      )} net cash flow after collections, expenses and supplier payments.`,
+      action: "Review cash flow",
+      href: "/reports",
+      priority: "high",
+    });
+  }
+
+  if (
+    aiAlerts.length === 0
+  ) {
+    aiAlerts.push({
+      title:
+        "No urgent business alerts detected",
+      description:
+        "Collections, payables, inventory and current operating signals do not require immediate attention.",
+      action: "Ask Business360 AI",
+      href: "/ai",
+      priority: "info",
+    });
+  }
+
+  const visibleAiAlerts =
+    aiAlerts.slice(0, 6);
+
   return (
     <div className="space-y-7">
       {/* HERO */}
@@ -1484,6 +1666,60 @@ export default async function DashboardPage() {
           live until the month is closed again.
         </div>
       )}
+
+      {/* AI ACTION CENTER */}
+
+      <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-4 border-b border-gray-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-violet-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-violet-700">
+                AI Signals
+              </span>
+
+              <h2 className="text-lg font-semibold text-gray-900">
+                AI Action Center
+              </h2>
+            </div>
+
+            <p className="mt-2 text-sm text-gray-500">
+              Smart business signals generated from live collections, payables,
+              inventory, sales and profitability data.
+            </p>
+          </div>
+
+          <Link
+            href="/ai"
+            className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800"
+          >
+            Ask AI Assistant →
+          </Link>
+        </div>
+
+        <div className="grid gap-3 p-5 lg:grid-cols-2">
+          {visibleAiAlerts.map(
+            (alert, index) => (
+              <AiAlertCard
+                key={`${alert.title}-${index}`}
+                title={alert.title}
+                description={
+                  alert.description
+                }
+                action={alert.action}
+                href={alert.href}
+                priority={
+                  alert.priority
+                }
+              />
+            )
+          )}
+        </div>
+
+        <div className="border-t border-gray-100 bg-gray-50 px-6 py-3 text-xs text-gray-500">
+          Business360 analyzes current operational signals only. Review source
+          records before making financial or purchasing decisions.
+        </div>
+      </section>
 
       {/* EXECUTIVE SNAPSHOT */}
 
@@ -2730,6 +2966,96 @@ function HealthRow({
         />
       </div>
     </div>
+  );
+}
+
+function AiAlertCard({
+  title,
+  description,
+  action,
+  href,
+  priority,
+}: {
+  title: string;
+  description: string;
+  action: string;
+  href: string;
+  priority:
+    | "critical"
+    | "high"
+    | "medium"
+    | "info";
+}) {
+  const styles =
+    priority === "critical"
+      ? {
+          badge:
+            "bg-red-50 text-red-700",
+          dot: "bg-red-500",
+          border:
+            "border-red-100",
+        }
+      : priority === "high"
+      ? {
+          badge:
+            "bg-amber-50 text-amber-700",
+          dot: "bg-amber-500",
+          border:
+            "border-amber-100",
+        }
+      : priority === "medium"
+      ? {
+          badge:
+            "bg-blue-50 text-blue-700",
+          dot: "bg-blue-500",
+          border:
+            "border-blue-100",
+        }
+      : {
+          badge:
+            "bg-green-50 text-green-700",
+          dot: "bg-green-500",
+          border:
+            "border-green-100",
+        };
+
+  return (
+    <Link
+      href={href}
+      className={`group rounded-xl border ${styles.border} p-4 transition hover:bg-gray-50`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${styles.dot}`}
+            />
+
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${styles.badge}`}
+            >
+              {priority}
+            </span>
+          </div>
+
+          <h3 className="mt-3 text-sm font-semibold text-gray-900">
+            {title}
+          </h3>
+
+          <p className="mt-1 text-xs leading-5 text-gray-500">
+            {description}
+          </p>
+        </div>
+
+        <span className="shrink-0 text-gray-300 transition group-hover:text-gray-700">
+          →
+        </span>
+      </div>
+
+      <div className="mt-3 text-xs font-semibold text-gray-700">
+        {action}
+      </div>
+    </Link>
   );
 }
 

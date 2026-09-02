@@ -7,7 +7,10 @@ export type Business360Role =
   | "staff"
   | "viewer";
 
-export const ROLE_LABELS: Record<Business360Role, string> = {
+export const ROLE_LABELS: Record<
+  Business360Role,
+  string
+> = {
   owner: "Owner",
   admin: "Admin",
   accountant: "Accountant",
@@ -17,11 +20,15 @@ export const ROLE_LABELS: Record<Business360Role, string> = {
   viewer: "Viewer",
 };
 
-const ROLE_PATHS: Record<Business360Role, string[]> = {
+const ROLE_PATHS: Record<
+  Business360Role,
+  string[]
+> = {
   owner: ["/"],
 
   admin: [
     "/dashboard",
+    "/notifications",
     "/customers",
     "/products",
     "/quotations",
@@ -34,6 +41,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
     "/expenses",
     "/reports",
     "/ai",
+    "/audit-log",
     "/settings/company",
     "/settings/business",
     "/settings/documents",
@@ -41,6 +49,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
 
   accountant: [
     "/dashboard",
+    "/notifications",
     "/customers",
     "/invoices",
     "/supplier-bills",
@@ -52,6 +61,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
 
   sales: [
     "/dashboard",
+    "/notifications",
     "/customers",
     "/products",
     "/quotations",
@@ -62,6 +72,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
 
   inventory: [
     "/dashboard",
+    "/notifications",
     "/products",
     "/inventory",
     "/purchase",
@@ -71,6 +82,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
 
   staff: [
     "/dashboard",
+    "/notifications",
     "/customers",
     "/products",
     "/quotations",
@@ -81,6 +93,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
 
   viewer: [
     "/dashboard",
+    "/notifications",
     "/customers",
     "/products",
     "/quotations",
@@ -96,8 +109,14 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
   ],
 };
 
-export function normalizeRole(value?: string | null): Business360Role {
-  const role = String(value || "").trim().toLowerCase();
+export function normalizeRole(
+  value?: string | null
+): Business360Role {
+  const role = String(
+    value || ""
+  )
+    .trim()
+    .toLowerCase();
 
   if (
     role === "owner" ||
@@ -115,27 +134,47 @@ export function normalizeRole(value?: string | null): Business360Role {
 }
 
 export function canAccessPath(
-  roleValue: string | null | undefined,
+  roleValue:
+    | string
+    | null
+    | undefined,
   pathname: string
 ) {
-  const role = normalizeRole(roleValue);
+  const role =
+    normalizeRole(roleValue);
 
   if (role === "owner") {
     return true;
   }
 
-  const cleanPath = pathname.split("?")[0] || "/";
+  const cleanPath =
+    pathname.split("?")[0] ||
+    "/";
 
-  return ROLE_PATHS[role].some((allowedPath) => {
-    if (allowedPath === "/") return true;
+  return ROLE_PATHS[
+    role
+  ].some((allowedPath) => {
+    if (
+      allowedPath === "/"
+    ) {
+      return true;
+    }
 
     return (
-      cleanPath === allowedPath ||
-      cleanPath.startsWith(`${allowedPath}/`)
+      cleanPath ===
+        allowedPath ||
+      cleanPath.startsWith(
+        `${allowedPath}/`
+      )
     );
   });
 }
 
-export function isReadOnlyRole(roleValue?: string | null) {
-  return normalizeRole(roleValue) === "viewer";
+export function isReadOnlyRole(
+  roleValue?: string | null
+) {
+  return (
+    normalizeRole(roleValue) ===
+    "viewer"
+  );
 }
