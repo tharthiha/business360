@@ -46,6 +46,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
     "/supplier-bills",
     "/expenses",
     "/reports",
+    "/ai",
     "/settings/accounting",
   ],
 
@@ -56,6 +57,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
     "/quotations",
     "/sales",
     "/invoices",
+    "/ai",
   ],
 
   inventory: [
@@ -64,6 +66,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
     "/inventory",
     "/purchase",
     "/suppliers",
+    "/ai",
   ],
 
   staff: [
@@ -73,6 +76,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
     "/quotations",
     "/sales",
     "/inventory",
+    "/ai",
   ],
 
   viewer: [
@@ -88,6 +92,7 @@ const ROLE_PATHS: Record<Business360Role, string[]> = {
     "/supplier-bills",
     "/expenses",
     "/reports",
+    "/ai",
   ],
 };
 
