@@ -4,524 +4,487 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 type Props = {
-  open: boolean;
-  onClose: () => void;
-
-  billId: number;
+  supplierBillId: number;
   companyId: number;
-  supplierId: number;
-
-  currency: string;
-
-  totalAmount: number;
-  paidAmount: number;
   balanceDue: number;
-
-  onSaved: () => Promise<void> | void;
+  currency: string;
+  onSuccess: () => void | Promise<void>;
 };
 
+type PeriodStatus = "open" | "closed" | "reopened";
+
 export default function RecordSupplierPaymentModal({
-  open,
-  onClose,
-  billId,
+  supplierBillId,
   companyId,
-  supplierId,
-  currency,
-  totalAmount,
-  paidAmount,
   balanceDue,
-  onSaved,
+  currency,
+  onSuccess,
 }: Props) {
   const supabase = createClient();
 
-  const [amount, setAmount] =
-    useState(
-      String(balanceDue || "")
-    );
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [checkingPeriod, setCheckingPeriod] = useState(false);
+  const [error, setError] = useState("");
 
-  const [method, setMethod] =
-    useState("cash");
+  const [amount, setAmount] = useState(String(balanceDue));
+  const [paymentDate, setPaymentDate] = useState(today());
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [referenceNo, setReferenceNo] = useState("");
+  const [notes, setNotes] = useState("");
+  const [slipFile, setSlipFile] = useState<File | null>(null);
 
-  const [
-    referenceNo,
-    setReferenceNo,
-  ] = useState("");
+  const [periodStatus, setPeriodStatus] =
+    useState<PeriodStatus>("open");
+  const [periodClosedAt, setPeriodClosedAt] =
+    useState<string | null>(null);
 
-  const [notes, setNotes] =
-    useState("");
+  function resetForm() {
+    setAmount(String(balanceDue));
+    setPaymentDate(today());
+    setPaymentMethod("cash");
+    setReferenceNo("");
+    setNotes("");
+    setSlipFile(null);
+    setPeriodStatus("open");
+    setPeriodClosedAt(null);
+    setError("");
+  }
 
-  const [saving, setSaving] =
-    useState(false);
+  async function checkPeriod(date: string): Promise<PeriodStatus> {
+    setCheckingPeriod(true);
 
-  const [message, setMessage] =
-    useState("");
+    try {
+      const { data, error } = await supabase
+        .from("accounting_period_closes")
+        .select("status, closed_at")
+        .eq("company_id", companyId)
+        .eq("period_start", firstDayOfDate(date))
+        .maybeSingle();
 
-  if (!open) {
-    return null;
+      if (error) throw error;
+
+      const status: PeriodStatus =
+        data?.status === "closed"
+          ? "closed"
+          : data?.status === "reopened"
+          ? "reopened"
+          : "open";
+
+      setPeriodStatus(status);
+      setPeriodClosedAt(data?.closed_at || null);
+
+      return status;
+    } finally {
+      setCheckingPeriod(false);
+    }
+  }
+
+  async function openModal() {
+    resetForm();
+    const date = today();
+    setPaymentDate(date);
+
+    try {
+      await checkPeriod(date);
+      setOpen(true);
+    } catch (err) {
+      setError(
+        formatSupabaseError(err, "Could not check accounting period.")
+      );
+    }
   }
 
   async function savePayment() {
-    const paymentAmount =
-      Number(amount || 0);
+    setError("");
 
-    if (
-      !Number.isFinite(
-        paymentAmount
-      ) ||
-      paymentAmount <= 0
-    ) {
-      setMessage(
-        "Enter a valid payment amount."
-      );
+    const paymentAmount = Number(amount);
 
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+      setError("Payment amount must be greater than 0.");
       return;
     }
 
-    if (
-      paymentAmount >
-      balanceDue
-    ) {
-      setMessage(
-        "Payment amount cannot exceed the outstanding balance."
-      );
-
+    if (paymentAmount > balanceDue) {
+      setError("Payment amount cannot be greater than balance due.");
       return;
     }
 
-    if (
-      (
-        method ===
-          "bank_transfer" ||
-        method === "qr"
-      ) &&
-      !referenceNo.trim()
-    ) {
-      setMessage(
-        "Reference number is required for Bank Transfer or QR payment."
-      );
+    const requiresProof =
+      paymentMethod === "bank_transfer" || paymentMethod === "qr";
 
+    if (requiresProof && !referenceNo.trim()) {
+      setError(
+        "Reference No. is required for Bank Transfer or QR payment."
+      );
       return;
     }
 
-    const confirmed =
-      window.confirm(
-        `Record supplier payment of ${money(
-          paymentAmount,
-          currency
-        )}?`
-      );
+    if (requiresProof && !slipFile) {
+      setError("Please upload a payment slip or proof.");
+      return;
+    }
 
-    if (!confirmed) {
+    if (slipFile && slipFile.size > 10 * 1024 * 1024) {
+      setError("Slip file must be 10 MB or smaller.");
       return;
     }
 
     setSaving(true);
-    setMessage("");
+    let slipPath: string | null = null;
 
     try {
-      const paymentNo =
-        `SPAY-${Date.now()}`;
+      const latestPeriod = await checkPeriod(paymentDate);
 
-      const {
-        error:
-          paymentError,
-      } = await supabase
-        .from(
-          "supplier_payments"
-        )
-        .insert({
-          company_id:
-            companyId,
-
-          supplier_id:
-            supplierId,
-
-          supplier_bill_id:
-            billId,
-
-          payment_no:
-            paymentNo,
-
-          payment_date:
-            today(),
-
-          amount:
-            paymentAmount,
-
-          payment_method:
-            method,
-
-          reference_no:
-            referenceNo.trim() ||
-            null,
-
-          notes:
-            notes.trim() ||
-            null,
-        });
-
-      if (paymentError) {
+      if (latestPeriod === "closed") {
         throw new Error(
-          paymentError.message ||
-            "Could not record supplier payment."
+          "The selected payment date belongs to a closed accounting period."
         );
       }
 
-      const newPaidAmount =
-        Number(
-          paidAmount || 0
-        ) + paymentAmount;
+      if (slipFile && requiresProof) {
+        const extension = getExtension(slipFile.name) || "file";
 
-      const newBalance =
-        Math.max(
-          0,
-          Number(
-            totalAmount || 0
-          ) -
-            newPaidAmount
-        );
+        slipPath =
+          `company-${companyId}/supplier-bill-${supplierBillId}/${Date.now()}.${extension}`;
 
-      const newStatus =
-        newBalance <= 0
-          ? "paid"
-          : "partially_paid";
+        const { error: uploadError } = await supabase.storage
+          .from("payment-slips")
+          .upload(slipPath, slipFile, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: slipFile.type || undefined,
+          });
 
-      const {
-        error:
-          billUpdateError,
-      } = await supabase
-        .from(
-          "supplier_bills"
-        )
-        .update({
-          paid_amount:
-            newPaidAmount,
-
-          balance_due:
-            newBalance,
-
-          status:
-            newStatus,
-
-          updated_at:
-            new Date().toISOString(),
-        })
-        .eq(
-          "id",
-          billId
-        );
-
-      if (
-        billUpdateError
-      ) {
-        throw new Error(
-          billUpdateError.message ||
-            "Payment saved, but bill balance could not be updated."
-        );
+        if (uploadError) throw uploadError;
       }
 
-      setAmount("");
-      setReferenceNo("");
-      setNotes("");
-      setMethod("cash");
+      const { error: rpcError } = await supabase.rpc(
+        "record_supplier_bill_payment",
+        {
+          p_supplier_bill_id: supplierBillId,
+          p_payment_date: paymentDate,
+          p_amount: paymentAmount,
+          p_payment_method: paymentMethod,
+          p_reference_no: referenceNo.trim() || null,
+          p_slip_path: slipPath,
+          p_notes: notes.trim() || null,
+        }
+      );
 
-      await onSaved();
+      if (rpcError) throw rpcError;
 
-      onClose();
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not save supplier payment."
+      setOpen(false);
+      resetForm();
+      await onSuccess();
+    } catch (err) {
+      console.error("[supplier-payment]", err);
+
+      if (slipPath) {
+        await supabase.storage
+          .from("payment-slips")
+          .remove([slipPath]);
+      }
+
+      setError(
+        formatSupabaseError(err, "Could not record supplier payment.")
       );
     } finally {
       setSaving(false);
     }
   }
 
+  const requiresProof =
+    paymentMethod === "bank_transfer" || paymentMethod === "qr";
+
+  const blocked =
+    saving || checkingPeriod || periodStatus === "closed";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-start justify-between border-b border-gray-200 px-6 py-5">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">
-              Record Supplier Payment
-            </h2>
+    <>
+      <button
+        type="button"
+        onClick={openModal}
+        className="mt-4 w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-black"
+      >
+        Record Payment
+      </button>
 
-            <p className="mt-1 text-sm text-gray-500">
-              Record money paid to the supplier against this bill.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-gray-500 hover:text-gray-900"
-          >
-            Close
-          </button>
-        </div>
-
-        <div className="p-6">
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Summary
-              label="Bill Total"
-              value={money(
-                totalAmount,
-                currency
-              )}
-            />
-
-            <Summary
-              label="Already Paid"
-              value={money(
-                paidAmount,
-                currency
-              )}
-            />
-
-            <Summary
-              label="Balance"
-              value={money(
-                balanceDue,
-                currency
-              )}
-              emphasis
-            />
-          </div>
-
-          {message && (
-            <div className="mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {message}
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white shadow-xl">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <h2 className="text-lg font-semibold text-gray-900">
+                Record Supplier Payment
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Balance due: {money(balanceDue, currency)}
+              </p>
             </div>
-          )}
 
-          <div className="mt-6 space-y-5">
-            <label className="block">
-              <div className="mb-2 text-sm font-medium text-gray-700">
-                Payment Amount *
-              </div>
+            <div className="space-y-5 p-6">
+              {error && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
 
-              <input
-                type="number"
-                min="0.01"
-                max={
-                  balanceDue
-                }
-                step="0.01"
-                value={amount}
-                onChange={(e) =>
-                  setAmount(
-                    e.target.value
-                  )
-                }
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-gray-400"
-              />
+              {periodStatus === "closed" && (
+                <Notice
+                  tone="closed"
+                  title="Selected Payment Period Closed"
+                  text={`The payment date ${formatDate(
+                    paymentDate
+                  )} belongs to a closed accounting period${
+                    periodClosedAt
+                      ? ` closed on ${formatDateTime(periodClosedAt)}`
+                      : ""
+                  }.`}
+                />
+              )}
 
-              <div className="mt-1 text-xs text-gray-400">
-                Maximum{" "}
-                {money(
-                  balanceDue,
-                  currency
-                )}
-              </div>
-            </label>
+              {periodStatus === "reopened" && (
+                <Notice
+                  tone="reopened"
+                  title="Selected Payment Period Reopened"
+                  text="Recording supplier payment is currently allowed."
+                />
+              )}
 
-            <label className="block">
-              <div className="mb-2 text-sm font-medium text-gray-700">
-                Payment Method *
-              </div>
+              <Field label="Payment Date">
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={async (e) => {
+                    const value = e.target.value;
+                    setPaymentDate(value);
 
-              <select
-                value={method}
-                onChange={(e) =>
-                  setMethod(
-                    e.target.value
-                  )
-                }
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gray-400"
+                    try {
+                      await checkPeriod(value);
+                    } catch (err) {
+                      setError(
+                        formatSupabaseError(
+                          err,
+                          "Could not check accounting period."
+                        )
+                      );
+                    }
+                  }}
+                  className={inputClass}
+                />
+              </Field>
+
+              <Field label="Amount">
+                <input
+                  type="number"
+                  min="0.01"
+                  max={balanceDue}
+                  step="0.01"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className={inputClass}
+                />
+              </Field>
+
+              <Field label="Payment Method">
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setPaymentMethod(value);
+
+                    if (value !== "bank_transfer" && value !== "qr") {
+                      setSlipFile(null);
+                    }
+                  }}
+                  className={inputClass}
+                >
+                  <option value="cash">Cash</option>
+                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="qr">QR / PromptPay</option>
+                  <option value="card">Card</option>
+                  <option value="other">Other</option>
+                </select>
+              </Field>
+
+              <Field
+                label={requiresProof ? "Reference No. *" : "Reference No."}
               >
-                <option value="cash">
-                  Cash
-                </option>
+                <input
+                  value={referenceNo}
+                  onChange={(e) => setReferenceNo(e.target.value)}
+                  className={inputClass}
+                  placeholder={requiresProof ? "Transaction reference" : "Optional"}
+                />
+              </Field>
 
-                <option value="bank_transfer">
-                  Bank Transfer
-                </option>
+              {requiresProof && (
+                <Field label="Payment Slip / Proof *">
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    onChange={(e) =>
+                      setSlipFile(e.target.files?.[0] || null)
+                    }
+                    className={inputClass}
+                  />
+                  <p className="mt-2 text-xs text-gray-500">
+                    JPG, PNG or PDF • Maximum 10 MB
+                  </p>
+                </Field>
+              )}
 
-                <option value="qr">
-                  QR / PromptPay
-                </option>
+              <Field label="Notes">
+                <textarea
+                  rows={4}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className={inputClass}
+                  placeholder="Optional supplier payment notes..."
+                />
+              </Field>
+            </div>
 
-                <option value="card">
-                  Card
-                </option>
+            <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setOpen(false);
+                  resetForm();
+                }}
+                className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700"
+              >
+                Cancel
+              </button>
 
-                <option value="other">
-                  Other
-                </option>
-              </select>
-            </label>
-
-            <label className="block">
-              <div className="mb-2 text-sm font-medium text-gray-700">
-                Reference Number
-                {(method ===
-                  "bank_transfer" ||
-                  method === "qr") && (
-                  <span className="text-red-500">
-                    {" "}
-                    *
-                  </span>
-                )}
-              </div>
-
-              <input
-                type="text"
-                value={
-                  referenceNo
-                }
-                onChange={(e) =>
-                  setReferenceNo(
-                    e.target.value
-                  )
-                }
-                placeholder="Bank reference / transaction ID"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-gray-400"
-              />
-            </label>
-
-            <label className="block">
-              <div className="mb-2 text-sm font-medium text-gray-700">
-                Notes
-              </div>
-
-              <textarea
-                rows={3}
-                value={notes}
-                onChange={(e) =>
-                  setNotes(
-                    e.target.value
-                  )
-                }
-                placeholder="Optional payment note"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-gray-400"
-              />
-            </label>
+              <button
+                type="button"
+                disabled={blocked}
+                onClick={savePayment}
+                className="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
+              >
+                {saving
+                  ? "Saving..."
+                  : checkingPeriod
+                  ? "Checking Period..."
+                  : periodStatus === "closed"
+                  ? "Period Closed"
+                  : "Save Payment"}
+              </button>
+            </div>
           </div>
         </div>
+      )}
+    </>
+  );
+}
 
-        <div className="flex justify-end gap-3 border-t border-gray-200 bg-gray-50 px-6 py-4">
-          <button
-            type="button"
-            disabled={saving}
-            onClick={onClose}
-            className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700"
-          >
-            Cancel
-          </button>
-
-          <button
-            type="button"
-            disabled={saving}
-            onClick={
-              savePayment
-            }
-            style={{
-              backgroundColor:
-                "#111827",
-              color:
-                "#ffffff",
-              border: "none",
-              borderRadius:
-                "8px",
-              padding:
-                "10px 18px",
-              fontSize:
-                "14px",
-              fontWeight:
-                600,
-              opacity:
-                saving
-                  ? 0.6
-                  : 1,
-            }}
-          >
-            {saving
-              ? "Saving..."
-              : "Record Payment"}
-          </button>
-        </div>
-      </div>
+function Notice({
+  tone,
+  title,
+  text,
+}: {
+  tone: "closed" | "reopened";
+  title: string;
+  text: string;
+}) {
+  return (
+    <div
+      className={`rounded-lg border px-4 py-3 ${
+        tone === "closed"
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : "border-blue-200 bg-blue-50 text-blue-800"
+      }`}
+    >
+      <div className="text-sm font-semibold">{title}</div>
+      <div className="mt-1 text-xs leading-5">{text}</div>
     </div>
   );
 }
 
-function Summary({
+function Field({
   label,
-  value,
-  emphasis = false,
+  children,
 }: {
   label: string;
-  value: string;
-  emphasis?: boolean;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg bg-gray-50 p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-gray-400">
-        {label}
-      </div>
-
-      <div
-        className={`mt-2 font-semibold ${
-          emphasis
-            ? "text-lg text-amber-600"
-            : "text-gray-900"
-        }`}
-      >
-        {value}
-      </div>
-    </div>
+    <label className="block">
+      <div className="mb-2 text-sm font-medium text-gray-700">{label}</div>
+      {children}
+    </label>
   );
+}
+
+const inputClass =
+  "w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none focus:border-gray-400";
+
+function firstDayOfDate(value: string) {
+  return `${String(value || "").slice(0, 7)}-01`;
 }
 
 function today() {
-  const date =
-    new Date();
-
-  const year =
-    date.getFullYear();
-
-  const month =
-    String(
-      date.getMonth() +
-        1
-    ).padStart(2, "0");
-
-  const day =
-    String(
-      date.getDate()
-    ).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-function money(
-  value: number,
-  currency: string
-) {
-  if (
-    currency === "MMK"
-  ) {
-    return `K ${Number(
-      value || 0
-    ).toLocaleString(
-      undefined,
-      {
-        maximumFractionDigits:
-          0,
-      }
-    )}`;
+function formatDate(value: string) {
+  const parts = String(value || "").split("-");
+  return parts.length === 3
+    ? `${parts[2]}/${parts[1]}/${parts[0]}`
+    : value || "-";
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function getExtension(name: string) {
+  const parts = name.split(".");
+  return parts.length < 2 ? "" : parts.pop()?.toLowerCase() || "";
+}
+
+function formatSupabaseError(err: unknown, fallback: string) {
+  if (err instanceof Error) return err.message || fallback;
+
+  if (err && typeof err === "object") {
+    const value = err as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+    };
+
+    const parts = [
+      typeof value.message === "string" ? value.message : "",
+      typeof value.details === "string" && value.details
+        ? `Details: ${value.details}`
+        : "",
+      typeof value.hint === "string" && value.hint
+        ? `Hint: ${value.hint}`
+        : "",
+      typeof value.code === "string" && value.code
+        ? `Code: ${value.code}`
+        : "",
+    ].filter(Boolean);
+
+    return parts.length ? parts.join(" • ") : fallback;
+  }
+
+  return fallback;
+}
+
+function money(value: number, currency: string) {
+  if (currency === "MMK") {
+    return `K ${Number(value || 0).toLocaleString(undefined, {
+      maximumFractionDigits: 0,
+    })}`;
   }
 
   const symbol =
@@ -533,15 +496,8 @@ function money(
       ? "€"
       : "฿";
 
-  return `${symbol}${Number(
-    value || 0
-  ).toLocaleString(
-    undefined,
-    {
-      minimumFractionDigits:
-        2,
-      maximumFractionDigits:
-        2,
-    }
-  )}`;
+  return `${symbol}${Number(value || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }

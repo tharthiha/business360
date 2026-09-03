@@ -3,6 +3,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import Link from "next/link";
@@ -99,6 +100,15 @@ export default function PurchaseOrderDetailClient({
     showReceiving,
     setShowReceiving,
   ] = useState(false);
+
+  const [receiptDate, setReceiptDate] =
+    useState(today());
+
+  const receiveRequestIdRef =
+    useRef<string | null>(null);
+
+  const billRequestIdRef =
+    useRef<string | null>(null);
 
   const [loading, setLoading] =
     useState(true);
@@ -357,7 +367,7 @@ export default function PurchaseOrderDetailClient({
 
           defaults[item.id] =
             remaining > 0
-              ? String(remaining)
+              ? "0"
               : "0";
         }
       );
@@ -583,30 +593,27 @@ export default function PurchaseOrderDetailClient({
   }
 
   async function receiveStock() {
-    if (!order) return;
+    if (!order || saving) return;
 
     const receivingRows =
       items
-        .map((item) => {
-          const amount =
-            Number(
-              receiveQty[
-                item.id
-              ] || 0
-            );
-
-          return {
-            item_id:
-              item.id,
-
-            receive_qty:
-              amount,
-          };
-        })
+        .map((item) => ({
+          item_id: item.id,
+          receive_qty: Number(
+            receiveQty[item.id] || 0
+          ),
+        }))
         .filter(
           (row) =>
-            row.receive_qty >
-            0
+            Number.isFinite(
+              row.receive_qty
+            ) &&
+            row.receive_qty > 0
+        )
+        .sort(
+          (left, right) =>
+            left.item_id -
+            right.item_id
         );
 
     if (
@@ -614,26 +621,29 @@ export default function PurchaseOrderDetailClient({
       0
     ) {
       setMessageType("error");
-
       setMessage(
         "Enter at least one quantity to receive."
       );
-
       return;
     }
 
     for (
-      const row of
-        receivingRows
+      const row of receivingRows
     ) {
       const item =
         items.find(
-          (item) =>
-            item.id ===
+          (value) =>
+            value.id ===
             row.item_id
         );
 
-      if (!item) continue;
+      if (!item) {
+        setMessageType("error");
+        setMessage(
+          "A selected purchase item no longer exists."
+        );
+        return;
+      }
 
       const remaining =
         item.qty -
@@ -643,93 +653,88 @@ export default function PurchaseOrderDetailClient({
         row.receive_qty >
         remaining
       ) {
-        setMessageType(
-          "error"
-        );
-
+        setMessageType("error");
         setMessage(
           `Receive quantity for "${item.description}" exceeds remaining quantity.`
         );
-
         return;
       }
     }
 
     const confirmed =
       window.confirm(
-        "Receive these items into inventory? Product stock will increase."
+        "Record this goods receipt and update inventory?"
       );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
+
+    const requestId =
+      receiveRequestIdRef.current ||
+      crypto.randomUUID();
+
+    receiveRequestIdRef.current =
+      requestId;
 
     setSaving(true);
     setMessage("");
 
     try {
-      // Less-step workflow:
-      // a Draft PO can go straight to Receive Stock. We advance it to
-      // Ordered immediately before the existing receiving RPC.
-      if (order.status === "draft") {
-        const { error: orderStatusError } = await supabase
-          .from("purchase_orders")
-          .update({
-            status: "ordered",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", order.id)
-          .eq("status", "draft");
-
-        if (orderStatusError) {
-          throw orderStatusError;
-        }
-      }
-
       const {
+        data,
         error,
       } = await supabase.rpc(
-        "receive_purchase_order_items",
+        "process_purchase_order_receipt",
         {
           p_purchase_order_id:
             order.id,
-
+          p_receipt_date:
+            receiptDate,
           p_items:
             receivingRows,
+          p_request_id:
+            requestId,
+          p_create_supplier_bill:
+            false,
+          p_bill_date:
+            null,
+          p_due_date:
+            null,
         }
       );
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
-      setShowReceiving(
-        false
-      );
+      receiveRequestIdRef.current =
+        null;
 
-      setMessageType(
-        "success"
-      );
+      setShowReceiving(false);
+      setMessageType("success");
+
+      const result =
+        normalizeRpcResult(data);
 
       setMessage(
-        "Stock received successfully. Inventory has been updated."
+        result.purchase_order_status ===
+          "received"
+          ? "Purchase Order fully received. Inventory has been updated."
+          : "Stock received successfully. Inventory has been updated."
       );
 
       await loadData();
-
       router.refresh();
     } catch (error) {
       setMessageType("error");
-
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not receive stock."
+        formatSupabaseError(
+          error,
+          "Could not receive stock."
+        )
       );
     } finally {
       setSaving(false);
     }
   }
+
 
   /*
     ========================================
@@ -740,7 +745,7 @@ export default function PurchaseOrderDetailClient({
   async function createSupplierBill() {
     if (
       !order ||
-      !supplier
+      creatingBill
     ) {
       return;
     }
@@ -750,11 +755,9 @@ export default function PurchaseOrderDetailClient({
       "received"
     ) {
       setMessageType("error");
-
       setMessage(
         "The Purchase Order must be fully received before creating a Supplier Bill."
       );
-
       return;
     }
 
@@ -762,7 +765,6 @@ export default function PurchaseOrderDetailClient({
       router.push(
         `/supplier-bills/${supplierBill.id}`
       );
-
       return;
     }
 
@@ -770,401 +772,104 @@ export default function PurchaseOrderDetailClient({
       items.length === 0
     ) {
       setMessageType("error");
-
       setMessage(
         "Purchase Order has no items."
       );
-
       return;
     }
 
     const confirmed =
       window.confirm(
-        "Create a Supplier Bill and make it ready for payment?"
+        "Create the Supplier Bill from this fully received Purchase Order?"
       );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
+
+    const requestId =
+      billRequestIdRef.current ||
+      crypto.randomUUID();
+
+    billRequestIdRef.current =
+      requestId;
+
+    const billDate = today();
+    const dueDate =
+      addDays(
+        billDate,
+        30
+      );
 
     setCreatingBill(true);
     setMessage("");
 
-    let createdBillId:
-      | number
-      | null = null;
-
     try {
-      /*
-        User + company
-      */
-
       const {
-        data: { user },
-        error: userError,
-      } =
-        await supabase.auth.getUser();
-
-      if (
-        userError ||
-        !user
-      ) {
-        throw new Error(
-          userError?.message ||
-            "Please login first."
-        );
-      }
-
-      const {
-        data: profile,
-        error: profileError,
-      } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
-
-      if (
-        profileError ||
-        !profile?.company_id
-      ) {
-        throw new Error(
-          profileError?.message ||
-            "Company profile not found."
-        );
-      }
-
-      const companyId =
-        Number(
-          profile.company_id
-        );
-
-      /*
-        Prevent duplicate
-      */
-
-      const {
-        data: existingBill,
-        error:
-          existingBillError,
-      } = await supabase
-        .from("supplier_bills")
-        .select(`
-          id,
-          bill_no
-        `)
-        .eq(
-          "purchase_order_id",
-          order.id
-        )
-        .maybeSingle();
-
-      if (
-        existingBillError
-      ) {
-        throw existingBillError;
-      }
-
-      if (existingBill) {
-        setSupplierBill(
-          existingBill as any
-        );
-
-        router.push(
-          `/supplier-bills/${existingBill.id}`
-        );
-
-        return;
-      }
-
-      /*
-        Bill date and due date
-        Default = 30 days
-      */
-
-      const billDate =
-        new Date();
-
-      const dueDate =
-        new Date();
-
-      dueDate.setDate(
-        dueDate.getDate() +
-          30
-      );
-
-      const billNo =
-        `BILL-${Date.now()}`;
-
-      /*
-        Create header
-      */
-
-      const {
-        data: bill,
-        error: billError,
-      } = await supabase
-        .from("supplier_bills")
-        .insert({
-          company_id:
-            companyId,
-
-          supplier_id:
-            order.supplier_id,
-
-          purchase_order_id:
+        data,
+        error,
+      } = await supabase.rpc(
+        "process_purchase_order_receipt",
+        {
+          p_purchase_order_id:
             order.id,
-
-          bill_no:
-            billNo,
-
-          bill_date:
-            toDateInput(
-              billDate
-            ),
-
-          due_date:
-            toDateInput(
-              dueDate
-            ),
-
-          status:
-            "open",
-
-          currency:
-            order.currency ||
-            "THB",
-
-          subtotal:
-            Number(
-              order.subtotal ||
-                0
-            ),
-
-          discount_amount:
-            Number(
-              order.discount_amount ||
-                0
-            ),
-
-          tax_amount:
-            Number(
-              order.tax_amount ||
-                0
-            ),
-
-          total_amount:
-            Number(
-              order.total_amount ||
-                0
-            ),
-
-          paid_amount:
-            0,
-
-          balance_due:
-            Number(
-              order.total_amount ||
-                0
-            ),
-
-          notes:
-            order.notes ||
-            null,
-        })
-        .select(`
-          id,
-          bill_no
-        `)
-        .single();
-
-      if (
-        billError ||
-        !bill
-      ) {
-        throw new Error(
-          billError?.message ||
-            "Could not create Supplier Bill."
-        );
-      }
-
-      createdBillId =
-        Number(bill.id);
-
-      /*
-        Copy PO items to bill
-      */
-
-      const billItems =
-        items.map(
-          (item) => ({
-            supplier_bill_id:
-              bill.id,
-
-            product_id:
-              item.product_id,
-
-            description:
-              item.description,
-
-            qty:
-              Number(
-                item.qty || 0
-              ),
-
-            unit_cost:
-              Number(
-                item.unit_cost ||
-                  0
-              ),
-
-            discount_percent:
-              Number(
-                item.discount_percent ||
-                  0
-              ),
-
-            tax_percent:
-              Number(
-                item.tax_percent ||
-                  0
-              ),
-
-            line_subtotal:
-              Number(
-                item.line_subtotal ||
-                  0
-              ),
-
-            discount_amount:
-              Number(
-                item.discount_amount ||
-                  0
-              ),
-
-            tax_amount:
-              Number(
-                item.tax_amount ||
-                  0
-              ),
-
-            line_total:
-              Number(
-                item.line_total ||
-                  0
-              ),
-
-            sort_order:
-              Number(
-                item.sort_order ||
-                  0
-              ),
-          })
-        );
-
-      const {
-        error:
-          billItemsError,
-      } = await supabase
-        .from(
-          "supplier_bill_items"
-        )
-        .insert(
-          billItems
-        );
-
-      if (
-        billItemsError
-      ) {
-        /*
-          Clean up bill header if
-          item insert fails
-        */
-
-        await supabase
-          .from(
-            "supplier_bills"
-          )
-          .delete()
-          .eq(
-            "id",
-            bill.id
-          );
-
-        throw new Error(
-          billItemsError.message ||
-            "Could not create Supplier Bill items."
-        );
-      }
-
-      setMessageType(
-        "success"
+          p_receipt_date:
+            billDate,
+          p_items:
+            [],
+          p_request_id:
+            requestId,
+          p_create_supplier_bill:
+            true,
+          p_bill_date:
+            billDate,
+          p_due_date:
+            dueDate,
+        }
       );
 
+      if (error) throw error;
+
+      billRequestIdRef.current =
+        null;
+
+      const result =
+        normalizeRpcResult(data);
+
+      const billId =
+        Number(
+          result.supplier_bill_id ||
+            0
+        );
+
+      if (!billId) {
+        throw new Error(
+          "Supplier Bill was not returned by the server."
+        );
+      }
+
+      setMessageType("success");
       setMessage(
-        `Supplier Bill ${bill.bill_no} created and is ready for payment.`
+        result.supplier_bill_no
+          ? `Supplier Bill ${result.supplier_bill_no} created and is ready for payment.`
+          : "Supplier Bill created and is ready for payment."
       );
-
-      /*
-        We will build this page next.
-      */
 
       router.push(
-        `/supplier-bills/${bill.id}`
+        `/supplier-bills/${billId}`
       );
-
       router.refresh();
     } catch (error) {
-      /*
-        Extra cleanup safety
-      */
-
-      if (
-        createdBillId
-      ) {
-        const {
-          data: itemCheck,
-        } = await supabase
-          .from(
-            "supplier_bill_items"
-          )
-          .select("id")
-          .eq(
-            "supplier_bill_id",
-            createdBillId
-          )
-          .limit(1);
-
-        if (
-          !itemCheck ||
-          itemCheck.length ===
-            0
-        ) {
-          await supabase
-            .from(
-              "supplier_bills"
-            )
-            .delete()
-            .eq(
-              "id",
-              createdBillId
-            );
-        }
-      }
-
       setMessageType("error");
-
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not create Supplier Bill."
+        formatSupabaseError(
+          error,
+          "Could not create Supplier Bill."
+        )
       );
     } finally {
-      setCreatingBill(
-        false
-      );
+      setCreatingBill(false);
     }
   }
+
 
   const receivingProgress =
     useMemo(() => {
@@ -1299,7 +1004,7 @@ export default function PurchaseOrderDetailClient({
 
             <p className="mt-1 text-sm text-gray-500">
               Prepare → Receive Goods →
-              Open Supplier Bill →
+              Supplier Bill →
               Payment
             </p>
           </div>
@@ -1541,7 +1246,7 @@ export default function PurchaseOrderDetailClient({
 
           <WorkflowStep
             number="4"
-            label="Open Bill"
+            label="Supplier Bill"
             text={
               supplierBill
                 ? "Bill created"
@@ -1654,6 +1359,59 @@ export default function PurchaseOrderDetailClient({
           </div>
 
           <div className="p-6">
+            <div className="mb-5 flex flex-col gap-4 rounded-lg border border-gray-200 bg-gray-50 p-4 sm:flex-row sm:items-end sm:justify-between">
+              <label className="block">
+                <div className="mb-1 text-xs font-medium text-gray-500">
+                  Receipt Date
+                </div>
+
+                <input
+                  type="date"
+                  value={receiptDate}
+                  onChange={(event) => {
+                    setReceiptDate(
+                      event.target.value
+                    );
+                    receiveRequestIdRef.current =
+                      null;
+                  }}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-gray-400"
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const allRemaining:
+                    Record<number, string> = {};
+
+                  items.forEach(
+                    (item) => {
+                      allRemaining[
+                        item.id
+                      ] = String(
+                        Math.max(
+                          0,
+                          item.qty -
+                            item.received_qty
+                        )
+                      );
+                    }
+                  );
+
+                  setReceiveQty(
+                    allRemaining
+                  );
+
+                  receiveRequestIdRef.current =
+                    null;
+                }}
+                className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Receive All Remaining
+              </button>
+            </div>
+
             <div className="space-y-3">
               {items.map(
                 (item) => {
@@ -1726,7 +1484,10 @@ export default function PurchaseOrderDetailClient({
                               item.id
                             ] || ""
                           }
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            receiveRequestIdRef.current =
+                              null;
+
                             setReceiveQty(
                               (
                                 current
@@ -1738,8 +1499,8 @@ export default function PurchaseOrderDetailClient({
                                     .target
                                     .value,
                               })
-                            )
-                          }
+                            );
+                          }}
                           className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-gray-400 disabled:bg-gray-50"
                         />
                       </div>
@@ -2455,24 +2216,155 @@ function formatDate(
   return value;
 }
 
-function toDateInput(
-  value: Date
+
+
+function normalizeRpcResult(
+  data: unknown
+): Record<string, any> {
+  if (
+    Array.isArray(data)
+  ) {
+    return (
+      (data[0] as Record<
+        string,
+        any
+      >) || {}
+    );
+  }
+
+  if (
+    data &&
+    typeof data ===
+      "object"
+  ) {
+    return data as Record<
+      string,
+      any
+    >;
+  }
+
+  return {};
+}
+
+function formatSupabaseError(
+  error: unknown,
+  fallback: string
 ) {
+  if (
+    error instanceof Error
+  ) {
+    return (
+      error.message ||
+      fallback
+    );
+  }
+
+  if (
+    error &&
+    typeof error === "object"
+  ) {
+    const value =
+      error as {
+        message?: unknown;
+        details?: unknown;
+        hint?: unknown;
+        code?: unknown;
+      };
+
+    const parts = [
+      typeof value.message ===
+      "string"
+        ? value.message
+        : "",
+      typeof value.details ===
+        "string" &&
+      value.details
+        ? `Details: ${value.details}`
+        : "",
+      typeof value.hint ===
+        "string" &&
+      value.hint
+        ? `Hint: ${value.hint}`
+        : "",
+      typeof value.code ===
+        "string" &&
+      value.code
+        ? `Code: ${value.code}`
+        : "",
+    ].filter(Boolean);
+
+    if (parts.length) {
+      return parts.join(
+        " • "
+      );
+    }
+  }
+
+  return fallback;
+}
+
+function today() {
+  const date =
+    new Date();
+
   const year =
-    value.getFullYear();
+    date.getFullYear();
 
   const month =
     String(
-      value.getMonth() + 1
-    ).padStart(2, "0");
+      date.getMonth() + 1
+    ).padStart(
+      2,
+      "0"
+    );
 
   const day =
     String(
-      value.getDate()
-    ).padStart(2, "0");
+      date.getDate()
+    ).padStart(
+      2,
+      "0"
+    );
 
   return `${year}-${month}-${day}`;
 }
+
+function addDays(
+  dateValue: string,
+  days: number
+) {
+  const date =
+    new Date(
+      `${dateValue}T00:00:00`
+    );
+
+  date.setDate(
+    date.getDate() +
+      days
+  );
+
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(
+      2,
+      "0"
+    );
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(
+      2,
+      "0"
+    );
+
+  return `${year}-${month}-${day}`;
+}
+
 
 function money(
   value: number,

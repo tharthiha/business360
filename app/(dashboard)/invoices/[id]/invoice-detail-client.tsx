@@ -56,180 +56,146 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
-
   const [periodStatus, setPeriodStatus] = useState<PeriodStatus>("open");
   const [periodClosedAt, setPeriodClosedAt] = useState<string | null>(null);
-
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadInvoice() {
-      setLoading(true);
-      setError("");
-      setSuccess("");
-
-      try {
-        const invoiceId = Number(id);
-        if (!Number.isFinite(invoiceId)) {
-          throw new Error("Invalid invoice ID.");
-        }
-
-        const { data: invoiceData, error: invoiceError } = await supabase
-          .from("invoices")
-          .select(`
-            id,
-            company_id,
-            customer_id,
-            sales_order_id,
-            invoice_no,
-            invoice_date,
-            due_date,
-            status,
-            currency,
-            subtotal,
-            discount_amount,
-            tax_amount,
-            total_amount,
-            paid_amount,
-            balance_due,
-            notes,
-            terms
-          `)
-          .eq("id", invoiceId)
-          .maybeSingle();
-
-        if (invoiceError) throw invoiceError;
-        if (!invoiceData) throw new Error("Invoice not found.");
-        if (cancelled) return;
-
-        const currentInvoice: Invoice = {
-          ...invoiceData,
-          company_id: Number(invoiceData.company_id),
-          subtotal: Number(invoiceData.subtotal || 0),
-          discount_amount: Number(invoiceData.discount_amount || 0),
-          tax_amount: Number(invoiceData.tax_amount || 0),
-          total_amount: Number(invoiceData.total_amount || 0),
-          paid_amount: Number(invoiceData.paid_amount || 0),
-          balance_due: Number(invoiceData.balance_due || 0),
-        };
-
-        setInvoice(currentInvoice);
-
-        const [customerResult, itemResult, closeResult] = await Promise.all([
-          supabase
-            .from("customers")
-            .select(`
-              id,
-              customer_name,
-              customer_code,
-              contact_name,
-              phone,
-              email,
-              address,
-              tax_id
-            `)
-            .eq("id", currentInvoice.customer_id)
-            .maybeSingle(),
-
-          supabase
-            .from("invoice_items")
-            .select(`
-              id,
-              description,
-              qty,
-              unit_price,
-              discount_percent,
-              tax_percent,
-              line_total
-            `)
-            .eq("invoice_id", invoiceId)
-            .order("sort_order", { ascending: true }),
-
-          supabase
-            .from("accounting_period_closes")
-            .select("status, closed_at")
-            .eq("company_id", currentInvoice.company_id)
-            .eq("period_start", firstDayOfDate(currentInvoice.invoice_date))
-            .maybeSingle(),
-        ]);
-
-        if (customerResult.error) throw customerResult.error;
-        if (itemResult.error) throw itemResult.error;
-        if (closeResult.error) throw closeResult.error;
-
-        if (!cancelled) {
-          setCustomer(customerResult.data as Customer | null);
-          setItems(
-            (itemResult.data || []).map((item: any) => ({
-              id: Number(item.id),
-              description: item.description,
-              qty: Number(item.qty || 0),
-              unit_price: Number(item.unit_price || 0),
-              discount_percent: Number(item.discount_percent || 0),
-              tax_percent: Number(item.tax_percent || 0),
-              line_total: Number(item.line_total || 0),
-            }))
-          );
-          setPeriodStatus(
-            closeResult.data?.status === "closed"
-              ? "closed"
-              : closeResult.data?.status === "reopened"
-              ? "reopened"
-              : "open"
-          );
-          setPeriodClosedAt(closeResult.data?.closed_at || null);
-        }
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not load invoice.");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    loadInvoice();
-    return () => {
-      cancelled = true;
-    };
+    void loadInvoice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  async function updateStatus(newStatus: string) {
-    if (!invoice || updating) return;
-
-    if (periodStatus === "closed") {
-      setError(
-        "This Invoice belongs to a closed accounting period and is read-only. Reopen the month from Reports → Month-End Close first."
-      );
-      return;
-    }
-
-    setUpdating(true);
+  async function loadInvoice(showLoader = true) {
+    if (showLoader) setLoading(true);
     setError("");
-    setSuccess("");
 
     try {
-      const { error: updateError } = await supabase
+      const invoiceId = Number(id);
+
+      if (!Number.isFinite(invoiceId)) {
+        throw new Error("Invalid invoice ID.");
+      }
+
+      const { data: invoiceData, error: invoiceError } = await supabase
         .from("invoices")
-        .update({ status: newStatus })
-        .eq("id", invoice.id);
+        .select(`
+          id,
+          company_id,
+          customer_id,
+          sales_order_id,
+          invoice_no,
+          invoice_date,
+          due_date,
+          status,
+          currency,
+          subtotal,
+          discount_amount,
+          tax_amount,
+          total_amount,
+          paid_amount,
+          balance_due,
+          notes,
+          terms
+        `)
+        .eq("id", invoiceId)
+        .maybeSingle();
 
-      if (updateError) throw updateError;
+      if (invoiceError) throw invoiceError;
+      if (!invoiceData) throw new Error("Invoice not found.");
 
-      setInvoice({ ...invoice, status: newStatus });
-      setSuccess(`Invoice status changed to ${capitalize(newStatus)}.`);
+      const currentInvoice: Invoice = {
+        ...invoiceData,
+        company_id: Number(invoiceData.company_id),
+        customer_id: Number(invoiceData.customer_id),
+        sales_order_id: invoiceData.sales_order_id
+          ? Number(invoiceData.sales_order_id)
+          : null,
+        subtotal: Number(invoiceData.subtotal || 0),
+        discount_amount: Number(invoiceData.discount_amount || 0),
+        tax_amount: Number(invoiceData.tax_amount || 0),
+        total_amount: Number(invoiceData.total_amount || 0),
+        paid_amount: Number(invoiceData.paid_amount || 0),
+        balance_due: Number(invoiceData.balance_due || 0),
+      };
+
+      setInvoice(currentInvoice);
+
+      const [customerResult, itemResult, closeResult] = await Promise.all([
+        supabase
+          .from("customers")
+          .select(`
+            id,
+            customer_name,
+            customer_code,
+            contact_name,
+            phone,
+            email,
+            address,
+            tax_id
+          `)
+          .eq("id", currentInvoice.customer_id)
+          .maybeSingle(),
+
+        supabase
+          .from("invoice_items")
+          .select(`
+            id,
+            description,
+            qty,
+            unit_price,
+            discount_percent,
+            tax_percent,
+            line_total
+          `)
+          .eq("invoice_id", invoiceId)
+          .order("sort_order", { ascending: true }),
+
+        supabase
+          .from("accounting_period_closes")
+          .select("status, closed_at")
+          .eq("company_id", currentInvoice.company_id)
+          .eq("period_start", firstDayOfDate(currentInvoice.invoice_date))
+          .maybeSingle(),
+      ]);
+
+      if (customerResult.error) throw customerResult.error;
+      if (itemResult.error) throw itemResult.error;
+      if (closeResult.error) throw closeResult.error;
+
+      setCustomer(customerResult.data as Customer | null);
+
+      setItems(
+        (itemResult.data || []).map((item: any) => ({
+          id: Number(item.id),
+          description: item.description,
+          qty: Number(item.qty || 0),
+          unit_price: Number(item.unit_price || 0),
+          discount_percent: Number(item.discount_percent || 0),
+          tax_percent: Number(item.tax_percent || 0),
+          line_total: Number(item.line_total || 0),
+        }))
+      );
+
+      setPeriodStatus(
+        closeResult.data?.status === "closed"
+          ? "closed"
+          : closeResult.data?.status === "reopened"
+          ? "reopened"
+          : "open"
+      );
+
+      setPeriodClosedAt(closeResult.data?.closed_at || null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update invoice status.");
+      console.error("[invoice-load]", err);
+      setError(formatSupabaseError(err, "Could not load invoice."));
     } finally {
-      setUpdating(false);
+      if (showLoader) setLoading(false);
     }
   }
+
 
   if (loading) {
     return (
@@ -258,7 +224,8 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
   const currency = invoice.currency || "THB";
   const canRecordPayment =
     periodStatus !== "closed" &&
-    (invoice.status === "sent" || invoice.status === "partially_paid");
+    ["draft", "sent", "partially_paid", "overdue"].includes(invoice.status) &&
+    invoice.balance_due > 0;
 
   return (
     <div className="space-y-6">
@@ -290,6 +257,7 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
               View Sales Order
             </button>
           )}
+
           <button
             type="button"
             onClick={() => router.push("/invoices")}
@@ -337,7 +305,10 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
           label="Due Date"
           value={invoice.due_date ? formatDate(invoice.due_date) : "-"}
         />
-        <SummaryCard label="Balance Due" value={money(invoice.balance_due, currency)} />
+        <SummaryCard
+          label="Balance Due"
+          value={money(invoice.balance_due, currency)}
+        />
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -353,12 +324,14 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
             <span className="rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-500">
               Workflow locked for closed period
             </span>
+          ) : invoice.status === "paid" ? (
+            <span className="rounded-lg bg-green-50 px-4 py-2.5 text-sm font-semibold text-green-700">
+              Fully Paid
+            </span>
           ) : (
-            <InvoiceStatusActions
-              status={invoice.status}
-              updating={updating}
-              onChange={updateStatus}
-            />
+            <span className="rounded-lg bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700">
+              Ready for Payment
+            </span>
           )}
         </div>
 
@@ -394,6 +367,7 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
                     <TableHeader right>Total</TableHeader>
                   </tr>
                 </thead>
+
                 <tbody className="divide-y divide-gray-100">
                   {items.map((item) => (
                     <tr key={item.id}>
@@ -442,7 +416,11 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
               />
               <Metric label="Tax" value={money(invoice.tax_amount, currency)} />
               <div className="border-t border-gray-200 pt-4">
-                <Metric label="Total" value={money(invoice.total_amount, currency)} strong />
+                <Metric
+                  label="Total"
+                  value={money(invoice.total_amount, currency)}
+                  strong
+                />
               </div>
             </div>
           </Section>
@@ -465,10 +443,7 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
             <div className="space-y-4">
               <InfoRow label="Invoice" value={invoice.invoice_no} />
               <InfoRow label="Currency" value={currency} />
-              <InfoRow
-                label="Status"
-                value={invoice.status === "sent" ? "Open" : capitalize(invoice.status)}
-              />
+              <InfoRow label="Status" value={invoiceStatusLabel(invoice.status)} />
             </div>
           </Section>
 
@@ -476,11 +451,9 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
             <p className="text-sm leading-6 text-gray-500">
               {periodStatus === "closed"
                 ? "This invoice is read-only because its accounting period is closed."
-                : invoice.status === "draft"
-                ? "Open this invoice to make it ready for customer payment."
                 : invoice.status === "paid"
                 ? "This invoice has been fully paid."
-                : "Record customer payments against this open invoice."}
+                : "Record customer payment against this invoice."}
             </p>
 
             {periodStatus === "closed" ? (
@@ -494,10 +467,13 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
             ) : canRecordPayment ? (
               <RecordPaymentModal
                 invoiceId={invoice.id}
-                customerId={invoice.customer_id}
+                companyId={invoice.company_id}
                 balanceDue={invoice.balance_due}
                 currency={currency}
-                onSuccess={() => window.location.reload()}
+                onSuccess={async () => {
+                  await loadInvoice(false);
+                  router.refresh();
+                }}
               />
             ) : (
               <button
@@ -515,57 +491,19 @@ export default function InvoiceDetailClient({ id }: { id: string }) {
   );
 }
 
-function InvoiceStatusActions({
-  status,
-  updating,
-  onChange,
-}: {
-  status: string;
-  updating: boolean;
-  onChange: (status: string) => void;
-}) {
-  const normalized = status || "draft";
-
-  if (normalized === "draft") {
-    return (
-      <button
-        type="button"
-        disabled={updating}
-        onClick={() => onChange("sent")}
-        style={{
-          backgroundColor: updating ? "#9ca3af" : "#111827",
-          color: "#ffffff",
-        }}
-        className="rounded-lg px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed"
-      >
-        {updating ? "Opening..." : "Open Invoice"}
-      </button>
-    );
-  }
-
-  if (normalized === "sent" || normalized === "partially_paid") {
-    return (
-      <span className="rounded-lg bg-green-50 px-4 py-2.5 text-sm font-semibold text-green-700">
-        Open for Payment
-      </span>
-    );
-  }
-
-  return null;
-}
-
 function InvoiceWorkflowSteps({ status }: { status: string }) {
   const normalized = status || "draft";
-  const openActive = ["sent", "partially_paid", "paid"].includes(normalized);
-  const paymentActive = ["partially_paid", "paid"].includes(normalized);
+  const paymentActive = ["draft", "sent", "partially_paid", "overdue", "paid"].includes(
+    normalized
+  );
   const paidActive = normalized === "paid";
 
   return (
     <div className="mt-6 grid gap-3 sm:grid-cols-3">
       <WorkflowStep
         number="1"
-        label={normalized === "draft" ? "Draft" : "Open"}
-        active={normalized === "draft" || openActive}
+        label="Invoice"
+        active
       />
       <WorkflowStep number="2" label="Payment" active={paymentActive} />
       <WorkflowStep number="3" label="Paid" active={paidActive} />
@@ -640,7 +578,13 @@ function PeriodBadge({ status }: { status: PeriodStatus }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-200 px-6 py-4">
@@ -651,7 +595,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
+function SummaryCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="text-sm font-medium text-gray-500">{label}</div>
@@ -660,10 +610,18 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function InfoItem({ label, value }: { label: string; value?: string | null }) {
+function InfoItem({
+  label,
+  value,
+}: {
+  label: string;
+  value?: string | null;
+}) {
   return (
     <div>
-      <div className="text-xs font-medium uppercase tracking-wide text-gray-400">{label}</div>
+      <div className="text-xs font-medium uppercase tracking-wide text-gray-400">
+        {label}
+      </div>
       <div className="mt-2 whitespace-pre-line text-sm font-medium text-gray-900">
         {value || "-"}
       </div>
@@ -671,7 +629,13 @@ function InfoItem({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function InfoRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="flex items-center justify-between gap-4">
       <span className="text-sm text-gray-500">{label}</span>
@@ -680,7 +644,13 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function TextCard({ title, value }: { title: string; value: string | null }) {
+function TextCard({
+  title,
+  value,
+}: {
+  title: string;
+  value: string | null;
+}) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
       <h3 className="font-semibold text-gray-900">{title}</h3>
@@ -702,10 +672,20 @@ function Metric({
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <span className={strong ? "font-semibold text-gray-900" : "text-sm text-gray-500"}>
+      <span
+        className={
+          strong ? "font-semibold text-gray-900" : "text-sm text-gray-500"
+        }
+      >
         {label}
       </span>
-      <span className={strong ? "text-xl font-semibold text-gray-900" : "font-medium text-gray-900"}>
+      <span
+        className={
+          strong
+            ? "text-xl font-semibold text-gray-900"
+            : "font-medium text-gray-900"
+        }
+      >
         {value}
       </span>
     </div>
@@ -732,6 +712,7 @@ function TableHeader({
 
 function StatusBadge({ status }: { status: string }) {
   const normalized = status || "draft";
+
   const style =
     normalized === "paid"
       ? "bg-green-50 text-green-700"
@@ -743,18 +724,51 @@ function StatusBadge({ status }: { status: string }) {
       ? "bg-red-50 text-red-700"
       : "bg-gray-100 text-gray-700";
 
-  const label =
-    normalized === "sent"
-      ? "Open"
-      : normalized === "partially_paid"
-      ? "Partially Paid"
-      : capitalize(normalized);
-
   return (
     <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${style}`}>
-      {label}
+      {invoiceStatusLabel(normalized)}
     </span>
   );
+}
+
+function invoiceStatusLabel(status: string) {
+  if (status === "draft") return "Unpaid";
+  if (status === "sent") return "Unpaid";
+  if (status === "partially_paid") return "Partially Paid";
+  if (status === "overdue") return "Overdue";
+  return capitalize(status);
+}
+
+function formatSupabaseError(err: unknown, fallback: string) {
+  if (err instanceof Error) {
+    return err.message || fallback;
+  }
+
+  if (err && typeof err === "object") {
+    const value = err as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+    };
+
+    const parts = [
+      typeof value.message === "string" ? value.message : "",
+      typeof value.details === "string" && value.details
+        ? `Details: ${value.details}`
+        : "",
+      typeof value.hint === "string" && value.hint
+        ? `Hint: ${value.hint}`
+        : "",
+      typeof value.code === "string" && value.code
+        ? `Code: ${value.code}`
+        : "",
+    ].filter(Boolean);
+
+    if (parts.length) return parts.join(" • ");
+  }
+
+  return fallback;
 }
 
 function firstDayOfDate(value: string) {
@@ -762,10 +776,13 @@ function firstDayOfDate(value: string) {
 }
 
 function money(value: number, currency: string) {
-  return `${currencySymbol(currency)}${Number(value || 0).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+  return `${currencySymbol(currency)}${Number(value || 0).toLocaleString(
+    undefined,
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }
+  )}`;
 }
 
 function currencySymbol(currency: string) {
@@ -777,8 +794,10 @@ function currencySymbol(currency: string) {
 }
 
 function formatDate(value: string) {
-  const parts = value.split("-");
-  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : value;
+  const parts = String(value || "").split("-");
+  return parts.length === 3
+    ? `${parts[2]}/${parts[1]}/${parts[0]}`
+    : value || "-";
 }
 
 function formatDateTime(value: string) {
@@ -787,7 +806,9 @@ function formatDateTime(value: string) {
 }
 
 function formatQty(value: number) {
-  return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 3 });
+  return Number(value || 0).toLocaleString(undefined, {
+    maximumFractionDigits: 3,
+  });
 }
 
 function formatPercent(value: number) {

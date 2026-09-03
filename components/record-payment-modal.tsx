@@ -5,100 +5,39 @@ import { createClient } from "@/lib/supabase/client";
 
 type Props = {
   invoiceId: number;
-  customerId: number;
+  companyId: number;
   balanceDue: number;
   currency: string;
-  onSuccess: () => void;
+  onSuccess: () => void | Promise<void>;
 };
 
-type PeriodStatus =
-  | "open"
-  | "closed"
-  | "reopened";
+type PeriodStatus = "open" | "closed" | "reopened";
 
 export default function RecordPaymentModal({
   invoiceId,
-  customerId,
+  companyId,
   balanceDue,
   currency,
   onSuccess,
 }: Props) {
   const supabase = createClient();
 
-  const [open, setOpen] =
-    useState(false);
-
-  const [saving, setSaving] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
-
-  const [amount, setAmount] =
-    useState(
-      String(balanceDue)
-    );
-
-  const [
-    paymentMethod,
-    setPaymentMethod,
-  ] = useState("cash");
-
-  const [
-    referenceNo,
-    setReferenceNo,
-  ] = useState("");
-
-  const [notes, setNotes] =
-    useState("");
-
-  const [
-    slipFile,
-    setSlipFile,
-  ] = useState<File | null>(
-    null
-  );
-
-  const [
-    paymentDate,
-    setPaymentDate,
-  ] = useState(today());
-
-  const [
-    companyId,
-    setCompanyId,
-  ] = useState<number | null>(
-    null
-  );
-
-  const [
-    periodStatus,
-    setPeriodStatus,
-  ] = useState<PeriodStatus>(
-    "open"
-  );
-
-  const [
-    periodClosedAt,
-    setPeriodClosedAt,
-  ] = useState<string | null>(
-    null
-  );
-
-  const [
-    checkingPeriod,
-    setCheckingPeriod,
-  ] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [amount, setAmount] = useState(String(balanceDue));
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [referenceNo, setReferenceNo] = useState("");
+  const [notes, setNotes] = useState("");
+  const [slipFile, setSlipFile] = useState<File | null>(null);
+  const [paymentDate, setPaymentDate] = useState(today());
+  const [periodStatus, setPeriodStatus] = useState<PeriodStatus>("open");
+  const [periodClosedAt, setPeriodClosedAt] = useState<string | null>(null);
+  const [checkingPeriod, setCheckingPeriod] = useState(false);
 
   function resetForm() {
-    setAmount(
-      String(balanceDue)
-    );
-
-    setPaymentMethod(
-      "cash"
-    );
-
+    setAmount(String(balanceDue));
+    setPaymentMethod("cash");
     setReferenceNo("");
     setNotes("");
     setSlipFile(null);
@@ -109,66 +48,42 @@ export default function RecordPaymentModal({
   }
 
   async function checkPaymentPeriod(
-    targetCompanyId: number,
     targetDate: string
-  ) {
-    if (
-      !targetCompanyId ||
-      !targetDate
-    ) {
-      return;
-    }
+  ): Promise<PeriodStatus> {
+    if (!companyId || !targetDate) return "open";
 
     setCheckingPeriod(true);
+    setError("");
 
     try {
-      const {
-        data,
-        error,
-      } = await supabase
-        .from(
-          "accounting_period_closes"
-        )
-        .select(`
-          status,
-          closed_at
-        `)
-        .eq(
-          "company_id",
-          targetCompanyId
-        )
-        .eq(
-          "period_start",
-          firstDayOfDate(
-            targetDate
-          )
-        )
+      const { data, error: closeError } = await supabase
+        .from("accounting_period_closes")
+        .select("status, closed_at")
+        .eq("company_id", companyId)
+        .eq("period_start", firstDayOfDate(targetDate))
         .maybeSingle();
 
-      if (error) {
-        throw error;
-      }
+      if (closeError) throw closeError;
 
-      setPeriodStatus(
-        data?.status ===
-          "closed"
+      const nextStatus: PeriodStatus =
+        data?.status === "closed"
           ? "closed"
-          : data?.status ===
-            "reopened"
+          : data?.status === "reopened"
           ? "reopened"
-          : "open"
-      );
+          : "open";
 
-      setPeriodClosedAt(
-        data?.closed_at ||
-          null
-      );
+      setPeriodStatus(nextStatus);
+      setPeriodClosedAt(data?.closed_at || null);
+
+      return nextStatus;
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Could not check payment accounting period."
+        formatSupabaseError(
+          err,
+          "Could not check payment accounting period."
+        )
       );
+      throw err;
     } finally {
       setCheckingPeriod(false);
     }
@@ -177,444 +92,145 @@ export default function RecordPaymentModal({
   async function openModal() {
     resetForm();
 
-    try {
-      const {
-        data: profile,
-        error: profileError,
-      } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .maybeSingle();
+    const defaultDate = today();
+    setPaymentDate(defaultDate);
 
-      if (profileError) {
-        throw profileError;
-      }
-
-      if (
-        !profile?.company_id
-      ) {
-        throw new Error(
-          "Company profile not found."
-        );
-      }
-
-      const resolvedCompanyId =
-        Number(
-          profile.company_id
-        );
-
-      const defaultDate =
-        today();
-
-      setCompanyId(
-        resolvedCompanyId
-      );
-
-      setPaymentDate(
-        defaultDate
-      );
-
-      await checkPaymentPeriod(
-        resolvedCompanyId,
-        defaultDate
-      );
-
-      setOpen(true);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not open payment form."
-      );
-    }
+    await checkPaymentPeriod(defaultDate);
+    setOpen(true);
   }
 
   async function handleSave() {
     setError("");
 
-    if (
-      checkingPeriod
-    ) {
-      setError(
-        "Please wait while the payment accounting period is checked."
-      );
+    if (checkingPeriod) {
+      setError("Please wait while the payment accounting period is checked.");
       return;
     }
 
-    if (
-      periodStatus ===
-      "closed"
-    ) {
+    if (periodStatus === "closed") {
       setError(
         "The selected payment date belongs to a closed accounting period. Choose another date or reopen that month."
       );
       return;
     }
 
-    const paymentAmount =
-      Number(amount);
+    const paymentAmount = Number(amount);
 
-    if (
-      !Number.isFinite(
-        paymentAmount
-      ) ||
-      paymentAmount <= 0
-    ) {
-      setError(
-        "Payment amount must be greater than 0."
-      );
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+      setError("Payment amount must be greater than 0.");
       return;
     }
 
-    if (
-      paymentAmount >
-      balanceDue
-    ) {
-      setError(
-        "Payment amount cannot be greater than balance due."
-      );
+    if (paymentAmount > balanceDue) {
+      setError("Payment amount cannot be greater than balance due.");
       return;
     }
 
     const requiresProof =
-      paymentMethod ===
-        "bank_transfer" ||
-      paymentMethod === "qr";
+      paymentMethod === "bank_transfer" || paymentMethod === "qr";
 
-    if (
-      requiresProof &&
-      !referenceNo.trim()
-    ) {
+    if (requiresProof && !referenceNo.trim()) {
       setError(
         "Reference No. is required for Bank Transfer or QR payment."
       );
       return;
     }
 
-    if (
-      requiresProof &&
-      !slipFile
-    ) {
-      setError(
-        "Please upload a payment slip or proof."
-      );
+    if (requiresProof && !slipFile) {
+      setError("Please upload a payment slip or proof.");
       return;
     }
 
-    if (
-      slipFile &&
-      slipFile.size >
-        10 * 1024 * 1024
-    ) {
-      setError(
-        "Slip file must be 10 MB or smaller."
-      );
+    if (slipFile && slipFile.size > 10 * 1024 * 1024) {
+      setError("Slip file must be 10 MB or smaller.");
       return;
     }
 
     setSaving(true);
 
+    let slipPath: string | null = null;
+
     try {
-      const {
-        data: profile,
-        error: profileError,
-      } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .maybeSingle();
+      /*
+        The company comes from the already-loaded invoice, not from a
+        non-unique profiles query. This is safer for SaaS/multi-user tenants.
+      */
+      const latestPeriodStatus =
+        await checkPaymentPeriod(paymentDate);
 
-      if (profileError) {
-        throw profileError;
-      }
-
-      if (
-        !profile?.company_id
-      ) {
+      if (latestPeriodStatus === "closed") {
         throw new Error(
-          "Company profile not found."
+          "The selected payment date belongs to a closed accounting period."
         );
       }
 
-      const resolvedCompanyId =
-        Number(
-          profile.company_id
-        );
-
-      setCompanyId(
-        resolvedCompanyId
-      );
-
-      const {
-        data: closeData,
-        error: closeError,
-      } = await supabase
-        .from(
-          "accounting_period_closes"
-        )
-        .select(`
-          status,
-          closed_at
-        `)
-        .eq(
-          "company_id",
-          resolvedCompanyId
-        )
-        .eq(
-          "period_start",
-          firstDayOfDate(
-            paymentDate
-          )
-        )
-        .maybeSingle();
-
-      if (closeError) {
-        throw closeError;
-      }
-
-      if (
-        closeData?.status ===
-        "closed"
-      ) {
-        setPeriodStatus(
-          "closed"
-        );
-
-        setPeriodClosedAt(
-          closeData.closed_at ||
-            null
-        );
-
-        throw new Error(
-          "The selected payment date is now in a closed accounting period. Reopen the month or choose another payment date."
-        );
-      }
-
-      let slipPath:
-        | string
-        | null = null;
-
-      if (
-        slipFile &&
-        requiresProof
-      ) {
-        const fileExtension =
-          getFileExtension(
-            slipFile.name
-          );
-
-        const safeExtension =
-          fileExtension ||
-          "file";
+      if (slipFile && requiresProof) {
+        const safeExtension = getFileExtension(slipFile.name) || "file";
 
         slipPath =
-          `company-${resolvedCompanyId}/invoice-${invoiceId}/${Date.now()}.${safeExtension}`;
+          `company-${companyId}/invoice-${invoiceId}/${Date.now()}.${safeExtension}`;
 
-        const {
-          error: uploadError,
-        } =
-          await supabase.storage
-            .from(
-              "payment-slips"
-            )
-            .upload(
-              slipPath,
-              slipFile,
-              {
-                cacheControl:
-                  "3600",
-                upsert: false,
-                contentType:
-                  slipFile.type ||
-                  undefined,
-              }
-            );
+        const { error: uploadError } = await supabase.storage
+          .from("payment-slips")
+          .upload(slipPath, slipFile, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: slipFile.type || undefined,
+          });
 
-        if (uploadError) {
-          throw uploadError;
+        if (uploadError) throw uploadError;
+      }
+
+      const { error: paymentError } = await supabase.rpc(
+        "record_invoice_payment",
+        {
+          p_invoice_id: invoiceId,
+          p_payment_date: paymentDate,
+          p_amount: paymentAmount,
+          p_payment_method: paymentMethod,
+          p_reference_no: referenceNo.trim() || null,
+          p_slip_path: slipPath,
+          p_notes: notes.trim() || null,
         }
-      }
+      );
 
-      const paymentNo =
-        `PAY-${Date.now()}`;
-
-      const {
-        error: paymentError,
-      } = await supabase
-        .from("payments")
-        .insert({
-          company_id:
-            resolvedCompanyId,
-
-          customer_id:
-            customerId,
-
-          invoice_id:
-            invoiceId,
-
-          payment_no:
-            paymentNo,
-
-          payment_date:
-            paymentDate,
-
-          amount:
-            paymentAmount,
-
-          payment_method:
-            paymentMethod,
-
-          reference_no:
-            referenceNo.trim() ||
-            null,
-
-          slip_path:
-            slipPath,
-
-          notes:
-            notes.trim() ||
-            null,
-        });
-
-      if (paymentError) {
-        if (slipPath) {
-          await supabase.storage
-            .from(
-              "payment-slips"
-            )
-            .remove([
-              slipPath,
-            ]);
-        }
-
-        throw paymentError;
-      }
-
-      const {
-        data: invoice,
-        error: invoiceError,
-      } = await supabase
-        .from("invoices")
-        .select(`
-          total_amount,
-          paid_amount
-        `)
-        .eq(
-          "id",
-          invoiceId
-        )
-        .maybeSingle();
-
-      if (invoiceError) {
-        throw invoiceError;
-      }
-
-      if (!invoice) {
-        throw new Error(
-          "Invoice not found."
-        );
-      }
-
-      const oldPaidAmount =
-        Number(
-          invoice.paid_amount ||
-            0
-        );
-
-      const totalAmount =
-        Number(
-          invoice.total_amount ||
-            0
-        );
-
-      const newPaidAmount =
-        oldPaidAmount +
-        paymentAmount;
-
-      const newBalance =
-        Math.max(
-          totalAmount -
-            newPaidAmount,
-          0
-        );
-
-      const newStatus =
-        newBalance <= 0
-          ? "paid"
-          : "partially_paid";
-
-      const {
-        error: updateError,
-      } = await supabase
-        .from("invoices")
-        .update({
-          paid_amount:
-            newPaidAmount,
-
-          balance_due:
-            newBalance,
-
-          status:
-            newStatus,
-        })
-        .eq(
-          "id",
-          invoiceId
-        );
-
-      if (updateError) {
-        throw updateError;
-      }
+      if (paymentError) throw paymentError;
 
       setOpen(false);
       resetForm();
-      onSuccess();
+      await onSuccess();
     } catch (err) {
-      console.error(err);
+      console.error("[record-invoice-payment]", err);
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not record payment."
-      );
+      /*
+        Storage upload cannot participate in the PostgreSQL transaction.
+        If the DB payment fails, remove the just-uploaded proof so we do not
+        leave an orphaned file.
+      */
+      if (slipPath) {
+        await supabase.storage
+          .from("payment-slips")
+          .remove([slipPath]);
+      }
+
+      setError(formatSupabaseError(err, "Could not record payment."));
     } finally {
       setSaving(false);
     }
   }
 
   const requiresProof =
-    paymentMethod ===
-      "bank_transfer" ||
-    paymentMethod === "qr";
+    paymentMethod === "bank_transfer" || paymentMethod === "qr";
 
   const saveBlocked =
-    saving ||
-    checkingPeriod ||
-    periodStatus ===
-      "closed";
+    saving || checkingPeriod || periodStatus === "closed";
 
   return (
     <>
       <button
         type="button"
         onClick={openModal}
-        style={{
-          backgroundColor:
-            "#111827",
-          color: "#ffffff",
-          border: "none",
-          borderRadius:
-            "8px",
-          padding:
-            "10px 16px",
-          width: "100%",
-          marginTop:
-            "16px",
-          fontSize:
-            "14px",
-          fontWeight: 600,
-          cursor:
-            "pointer",
-        }}
+        className="mt-4 w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-black"
       >
         Record Payment
       </button>
@@ -626,13 +242,8 @@ export default function RecordPaymentModal({
               <h2 className="text-lg font-semibold text-gray-900">
                 Record Payment
               </h2>
-
               <p className="mt-1 text-sm text-gray-500">
-                Balance due:{" "}
-                {money(
-                  balanceDue,
-                  currency
-                )}
+                Balance due: {money(balanceDue, currency)}
               </p>
             </div>
 
@@ -643,8 +254,7 @@ export default function RecordPaymentModal({
                 </div>
               )}
 
-              {periodStatus ===
-                "closed" && (
+              {periodStatus === "closed" && (
                 <PeriodNotice
                   tone="closed"
                   title="Selected Payment Period Closed"
@@ -652,16 +262,13 @@ export default function RecordPaymentModal({
                     paymentDate
                   )} belongs to a closed accounting period${
                     periodClosedAt
-                      ? ` closed on ${formatDateTime(
-                          periodClosedAt
-                        )}`
+                      ? ` closed on ${formatDateTime(periodClosedAt)}`
                       : ""
                   }. Choose another date or reopen that month before saving the payment.`}
                 />
               )}
 
-              {periodStatus ===
-                "reopened" && (
+              {periodStatus === "reopened" && (
                 <PeriodNotice
                   tone="reopened"
                   title="Selected Payment Period Reopened"
@@ -672,38 +279,18 @@ export default function RecordPaymentModal({
               <Field label="Payment Date">
                 <input
                   type="date"
-                  value={
-                    paymentDate
-                  }
-                  onChange={async (
-                    e
-                  ) => {
-                    const nextDate =
-                      e.target.value;
-
-                    setPaymentDate(
-                      nextDate
-                    );
-
-                    if (companyId) {
-                      await checkPaymentPeriod(
-                        companyId,
-                        nextDate
-                      );
-                    }
+                  value={paymentDate}
+                  onChange={async (e) => {
+                    const nextDate = e.target.value;
+                    setPaymentDate(nextDate);
+                    await checkPaymentPeriod(nextDate);
                   }}
-                  className={
-                    inputClass
-                  }
+                  className={inputClass}
                 />
 
                 <PeriodHint
-                  status={
-                    periodStatus
-                  }
-                  checking={
-                    checkingPeriod
-                  }
+                  status={periodStatus}
+                  checking={checkingPeriod}
                 />
               </Field>
 
@@ -713,86 +300,42 @@ export default function RecordPaymentModal({
                   min="0.01"
                   step="0.01"
                   value={amount}
-                  onChange={(e) =>
-                    setAmount(
-                      e.target.value
-                    )
-                  }
-                  className={
-                    inputClass
-                  }
+                  onChange={(e) => setAmount(e.target.value)}
+                  className={inputClass}
                 />
               </Field>
 
               <Field label="Payment Method">
                 <select
-                  value={
-                    paymentMethod
-                  }
+                  value={paymentMethod}
                   onChange={(e) => {
-                    const nextMethod =
-                      e.target.value;
-
-                    setPaymentMethod(
-                      nextMethod
-                    );
+                    const nextMethod = e.target.value;
+                    setPaymentMethod(nextMethod);
 
                     if (
-                      nextMethod !==
-                        "bank_transfer" &&
-                      nextMethod !==
-                        "qr"
+                      nextMethod !== "bank_transfer" &&
+                      nextMethod !== "qr"
                     ) {
-                      setSlipFile(
-                        null
-                      );
+                      setSlipFile(null);
                     }
                   }}
-                  className={
-                    inputClass
-                  }
+                  className={inputClass}
                 >
-                  <option value="cash">
-                    Cash
-                  </option>
-
-                  <option value="bank_transfer">
-                    Bank Transfer
-                  </option>
-
-                  <option value="qr">
-                    QR / PromptPay
-                  </option>
-
-                  <option value="card">
-                    Card
-                  </option>
-
-                  <option value="other">
-                    Other
-                  </option>
+                  <option value="cash">Cash</option>
+                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="qr">QR / PromptPay</option>
+                  <option value="card">Card</option>
+                  <option value="other">Other</option>
                 </select>
               </Field>
 
               <Field
-                label={
-                  requiresProof
-                    ? "Reference No. *"
-                    : "Reference No."
-                }
+                label={requiresProof ? "Reference No. *" : "Reference No."}
               >
                 <input
-                  value={
-                    referenceNo
-                  }
-                  onChange={(e) =>
-                    setReferenceNo(
-                      e.target.value
-                    )
-                  }
-                  className={
-                    inputClass
-                  }
+                  value={referenceNo}
+                  onChange={(e) => setReferenceNo(e.target.value)}
+                  className={inputClass}
                   placeholder={
                     requiresProof
                       ? "Transaction / transfer reference"
@@ -806,37 +349,24 @@ export default function RecordPaymentModal({
                   <input
                     type="file"
                     accept="image/*,.pdf"
-                    onChange={(e) => {
-                      const file =
-                        e.target
-                          .files?.[0] ||
-                        null;
-
-                      setSlipFile(
-                        file
-                      );
-                    }}
-                    className={
-                      inputClass
+                    onChange={(e) =>
+                      setSlipFile(e.target.files?.[0] || null)
                     }
+                    className={inputClass}
                   />
 
                   <p className="mt-2 text-xs leading-5 text-gray-500">
-                    Upload bank transfer slip, QR payment proof, screenshot, JPG, PNG or PDF. Maximum 10 MB.
+                    Upload bank transfer slip, QR payment proof, screenshot,
+                    JPG, PNG or PDF. Maximum 10 MB.
                   </p>
 
                   {slipFile && (
                     <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
                       <div className="text-sm font-medium text-gray-700">
-                        {
-                          slipFile.name
-                        }
+                        {slipFile.name}
                       </div>
-
                       <div className="mt-1 text-xs text-gray-500">
-                        {formatFileSize(
-                          slipFile.size
-                        )}
+                        {formatFileSize(slipFile.size)}
                       </div>
                     </div>
                   )}
@@ -847,21 +377,16 @@ export default function RecordPaymentModal({
                 <textarea
                   rows={4}
                   value={notes}
-                  onChange={(e) =>
-                    setNotes(
-                      e.target.value
-                    )
-                  }
-                  className={
-                    inputClass
-                  }
+                  onChange={(e) => setNotes(e.target.value)}
+                  className={inputClass}
                   placeholder="Optional payment notes..."
                 />
               </Field>
 
               {requiresProof && (
                 <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-700">
-                  Bank Transfer and QR payments require a reference number and payment proof for future verification.
+                  Bank Transfer and QR payments require a reference number and
+                  payment proof for future verification.
                 </div>
               )}
             </div>
@@ -869,9 +394,7 @@ export default function RecordPaymentModal({
             <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
               <button
                 type="button"
-                disabled={
-                  saving
-                }
+                disabled={saving}
                 onClick={() => {
                   setOpen(false);
                   resetForm();
@@ -883,45 +406,15 @@ export default function RecordPaymentModal({
 
               <button
                 type="button"
-                disabled={
-                  saveBlocked
-                }
-                onClick={
-                  handleSave
-                }
-                style={{
-                  backgroundColor:
-                    saveBlocked
-                      ? "#d1d5db"
-                      : "#111827",
-                  color:
-                    "#ffffff",
-                  border:
-                    "none",
-                  borderRadius:
-                    "8px",
-                  padding:
-                    "10px 16px",
-                  fontSize:
-                    "14px",
-                  fontWeight:
-                    600,
-                  cursor:
-                    saveBlocked
-                      ? "not-allowed"
-                      : "pointer",
-                  opacity:
-                    saveBlocked
-                      ? 0.7
-                      : 1,
-                }}
+                disabled={saveBlocked}
+                onClick={handleSave}
+                className="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
               >
                 {saving
                   ? "Saving..."
                   : checkingPeriod
                   ? "Checking Period..."
-                  : periodStatus ===
-                    "closed"
+                  : periodStatus === "closed"
                   ? "Selected Period Closed"
                   : "Save Payment"}
               </button>
@@ -938,9 +431,7 @@ function PeriodNotice({
   title,
   text,
 }: {
-  tone:
-    | "closed"
-    | "reopened";
+  tone: "closed" | "reopened";
   title: string;
   text: string;
 }) {
@@ -950,16 +441,9 @@ function PeriodNotice({
       : "border-blue-200 bg-blue-50 text-blue-800";
 
   return (
-    <div
-      className={`rounded-lg border px-4 py-3 ${classes}`}
-    >
-      <div className="text-sm font-semibold">
-        {title}
-      </div>
-
-      <div className="mt-1 text-xs leading-5">
-        {text}
-      </div>
+    <div className={`rounded-lg border px-4 py-3 ${classes}`}>
+      <div className="text-sm font-semibold">{title}</div>
+      <div className="mt-1 text-xs leading-5">{text}</div>
     </div>
   );
 }
@@ -979,10 +463,7 @@ function PeriodHint({
     );
   }
 
-  if (
-    status ===
-    "closed"
-  ) {
+  if (status === "closed") {
     return (
       <p className="mt-2 text-xs font-medium text-amber-700">
         This payment date is in a closed accounting period.
@@ -990,10 +471,7 @@ function PeriodHint({
     );
   }
 
-  if (
-    status ===
-    "reopened"
-  ) {
+  if (status === "reopened") {
     return (
       <p className="mt-2 text-xs font-medium text-blue-700">
         This payment date is in a reopened accounting period.
@@ -1020,153 +498,93 @@ function Field({
 }) {
   return (
     <label className="block">
-      <div className="mb-2 text-sm font-medium text-gray-700">
-        {label}
-      </div>
-
+      <div className="mb-2 text-sm font-medium text-gray-700">{label}</div>
       {children}
     </label>
   );
 }
 
-function firstDayOfDate(
-  value: string
-) {
-  return `${String(
-    value || ""
-  ).slice(0, 7)}-01`;
+function firstDayOfDate(value: string) {
+  return `${String(value || "").slice(0, 7)}-01`;
 }
 
 function today() {
-  const date =
-    new Date();
-
-  const year =
-    date.getFullYear();
-
-  const month =
-    String(
-      date.getMonth() + 1
-    ).padStart(2, "0");
-
-  const day =
-    String(
-      date.getDate()
-    ).padStart(2, "0");
-
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
-function formatDate(
-  value: string
-) {
-  const parts =
-    String(
-      value || ""
-    ).split("-");
-
+function formatDate(value: string) {
+  const parts = String(value || "").split("-");
   return parts.length === 3
     ? `${parts[2]}/${parts[1]}/${parts[0]}`
     : value || "-";
 }
 
-function formatDateTime(
-  value: string
-) {
-  const date =
-    new Date(value);
-
-  return Number.isNaN(
-    date.getTime()
-  )
-    ? value
-    : date.toLocaleString();
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-function getFileExtension(
-  fileName: string
-) {
-  const parts =
-    fileName.split(".");
-
-  if (
-    parts.length < 2
-  ) {
-    return "";
-  }
-
-  return (
-    parts
-      .pop()
-      ?.toLowerCase() ||
-    ""
-  );
+function getFileExtension(fileName: string) {
+  const parts = fileName.split(".");
+  return parts.length < 2 ? "" : parts.pop()?.toLowerCase() || "";
 }
 
-function formatFileSize(
-  bytes: number
-) {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-
-  if (
-    bytes <
-    1024 * 1024
-  ) {
-    return `${(
-      bytes / 1024
-    ).toFixed(1)} KB`;
-  }
-
-  return `${(
-    bytes /
-    (1024 * 1024)
-  ).toFixed(1)} MB`;
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function money(
-  value: number,
-  currency: string
-) {
-  return `${currencySymbol(
-    currency
-  )}${Number(
-    value || 0
-  ).toLocaleString(undefined, {
-    minimumFractionDigits:
-      2,
-    maximumFractionDigits:
-      2,
-  })}`;
+function formatSupabaseError(err: unknown, fallback: string) {
+  if (err instanceof Error) {
+    return err.message || fallback;
+  }
+
+  if (err && typeof err === "object") {
+    const value = err as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+    };
+
+    const parts = [
+      typeof value.message === "string" ? value.message : "",
+      typeof value.details === "string" && value.details
+        ? `Details: ${value.details}`
+        : "",
+      typeof value.hint === "string" && value.hint
+        ? `Hint: ${value.hint}`
+        : "",
+      typeof value.code === "string" && value.code
+        ? `Code: ${value.code}`
+        : "",
+    ].filter(Boolean);
+
+    if (parts.length) return parts.join(" • ");
+  }
+
+  return fallback;
 }
 
-function currencySymbol(
-  currency: string
-) {
-  if (
-    currency === "MMK"
-  ) {
-    return "K ";
-  }
+function money(value: number, currency: string) {
+  return `${currencySymbol(currency)}${Number(value || 0).toLocaleString(
+    undefined,
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }
+  )}`;
+}
 
-  if (
-    currency === "USD"
-  ) {
-    return "$";
-  }
-
-  if (
-    currency === "EUR"
-  ) {
-    return "€";
-  }
-
-  if (
-    currency === "SGD"
-  ) {
-    return "S$";
-  }
-
+function currencySymbol(currency: string) {
+  if (currency === "MMK") return "K ";
+  if (currency === "USD") return "$";
+  if (currency === "EUR") return "€";
+  if (currency === "SGD") return "S$";
   return "฿";
 }

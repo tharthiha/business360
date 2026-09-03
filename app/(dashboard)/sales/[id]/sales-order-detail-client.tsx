@@ -274,50 +274,17 @@ export default function SalesOrderDetailClient({ id }: { id: string }) {
       .maybeSingle();
 
     if (existingError) throw existingError;
-    if (existing) {
-      setDeliveryNote(existing as DeliveryNote);
-      return existing as DeliveryNote;
-    }
 
-    if (!ensurePeriodEditable("create a Delivery Note")) {
+    if (!existing) {
       throw new Error(
-        "The accounting period is closed. A new Delivery Note cannot be created."
+        "Delivery Note is missing. Fulfillment should create it automatically."
       );
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("company_id")
-      .maybeSingle();
-
-    if (profileError) throw profileError;
-    if (!profile?.company_id) throw new Error("Company profile not found.");
-
-    const { data: created, error: createError } = await supabase
-      .from("delivery_notes")
-      .insert({
-        company_id: profile.company_id,
-        sales_order_id: order.id,
-        customer_id: order.customer_id,
-        delivery_note_no: `DN-${Date.now()}`,
-        delivery_date: new Date().toISOString().slice(0, 10),
-        receiver_name: null,
-        remarks: order.notes || "Goods delivered successfully.",
-      })
-      .select(`
-        id,
-        delivery_note_no,
-        delivery_date,
-        receiver_name,
-        remarks
-      `)
-      .single();
-
-    if (createError) throw createError;
-
-    setDeliveryNote(created as DeliveryNote);
-    return created as DeliveryNote;
+    setDeliveryNote(existing as DeliveryNote);
+    return existing as DeliveryNote;
   }
+
 
   async function fulfillOrder() {
     if (!salesOrder || updating) return;
@@ -407,17 +374,7 @@ export default function SalesOrderDetailClient({ id }: { id: string }) {
       await loadSalesOrder(false);
       router.refresh();
     } catch (err) {
-      const message = formatSupabaseError(
-        err,
-        "Could not fulfill Sales Order."
-      );
-
-      console.warn(
-        "[sales-order-fulfillment]",
-        message
-      );
-
-      setError(message);
+      setError(err instanceof Error ? err.message : "Could not fulfill Sales Order.");
     } finally {
       setUpdating(false);
     }
@@ -432,110 +389,62 @@ export default function SalesOrderDetailClient({ id }: { id: string }) {
       return;
     }
 
+    if (!salesOrder.is_fulfilled) {
+      setError("Sales Order must be fulfilled before creating an invoice.");
+      return;
+    }
+
     setUpdating(true);
     setError("");
     setSuccess("");
 
     try {
-      const { data: profileData, error: profileError } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .maybeSingle();
+      const invoiceDate = today();
+      const dueDate = addDays(invoiceDate, 30);
 
-      if (profileError) throw profileError;
-      if (!profileData?.company_id) throw new Error("Company profile not found.");
+      const { data, error } = await supabase.rpc(
+        "create_invoice_from_sales_order",
+        {
+          p_sales_order_id: salesOrder.id,
+          p_invoice_date: invoiceDate,
+          p_due_date: dueDate,
+        }
+      );
 
-      const { data: existingInvoice, error: existingInvoiceError } = await supabase
-        .from("invoices")
-        .select("id, invoice_no")
-        .eq("sales_order_id", salesOrder.id)
-        .maybeSingle();
+      if (error) throw error;
 
-      if (existingInvoiceError) throw existingInvoiceError;
-      if (existingInvoice) {
-        router.push(`/invoices/${existingInvoice.id}`);
-        return;
+      const result =
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)
+          : {};
+
+      const invoiceId = Number(result.invoice_id || 0);
+
+      if (!invoiceId) {
+        throw new Error("Invoice ID was not returned by the server.");
       }
 
-      const dueDateObject = new Date();
-      dueDateObject.setDate(dueDateObject.getDate() + 30);
+      setSuccess(
+        typeof result.invoice_no === "string"
+          ? `Invoice ${result.invoice_no} is ready for payment.`
+          : "Invoice is ready for payment."
+      );
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from("invoices")
-        .insert({
-          company_id: profileData.company_id,
-          customer_id: salesOrder.customer_id,
-          sales_order_id: salesOrder.id,
-          invoice_no: `INV-${Date.now()}`,
-          invoice_date: new Date().toISOString().slice(0, 10),
-          due_date: dueDateObject.toISOString().slice(0, 10),
-          status: "sent",
-          currency: salesOrder.currency,
-          subtotal: salesOrder.subtotal,
-          discount_amount: salesOrder.discount_amount,
-          tax_amount: salesOrder.tax_amount,
-          total_amount: salesOrder.total_amount,
-          paid_amount: 0,
-          balance_due: salesOrder.total_amount,
-          notes: salesOrder.notes,
-          terms: salesOrder.terms,
-        })
-        .select("id, invoice_no")
-        .single();
-
-      if (invoiceError) throw invoiceError;
-
-      const { data: orderItems, error: orderItemsError } = await supabase
-        .from("sales_order_items")
-        .select(`
-          product_id,
-          description,
-          qty,
-          unit_price,
-          discount_percent,
-          tax_percent,
-          line_subtotal,
-          discount_amount,
-          tax_amount,
-          line_total,
-          sort_order
-        `)
-        .eq("sales_order_id", salesOrder.id)
-        .order("sort_order", { ascending: true });
-
-      if (orderItemsError) throw orderItemsError;
-
-      if (orderItems?.length) {
-        const { error: itemInsertError } = await supabase
-          .from("invoice_items")
-          .insert(
-            orderItems.map((item: any) => ({
-              invoice_id: invoice.id,
-              product_id: item.product_id,
-              description: item.description,
-              qty: item.qty,
-              unit_price: item.unit_price,
-              discount_percent: item.discount_percent,
-              tax_percent: item.tax_percent,
-              line_subtotal: item.line_subtotal,
-              discount_amount: item.discount_amount,
-              tax_amount: item.tax_amount,
-              line_total: item.line_total,
-              sort_order: item.sort_order,
-            }))
-          );
-
-        if (itemInsertError) throw itemInsertError;
-      }
-
-      setSuccess(`Invoice ${invoice.invoice_no} created and opened for payment.`);
-      router.push(`/invoices/${invoice.id}`);
+      router.push(`/invoices/${invoiceId}`);
+      router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create invoice.");
+      const message = formatSupabaseError(
+        err,
+        "Could not create invoice."
+      );
+
+      console.warn("[sales-order-invoice]", message);
+      setError(message);
     } finally {
       setUpdating(false);
     }
   }
+
 
   async function openDeliveryNote() {
     if (!salesOrder) return;
@@ -871,12 +780,10 @@ export default function SalesOrderDetailClient({ id }: { id: string }) {
                 </div>
                 <ActionButton label="View / Print Delivery Note" onClick={openDeliveryNote} full />
               </>
-            ) : periodStatus === "closed" ? (
-              <div className="rounded-lg bg-gray-100 px-4 py-3 text-sm text-gray-600">
-                Missing Delivery Note cannot be created while this accounting period is closed.
-              </div>
             ) : (
-              <ActionButton label="Create Delivery Note" onClick={openDeliveryNote} full />
+              <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                Delivery Note is missing. Fulfillment should create it automatically.
+              </div>
             )}
           </Section>
 
@@ -1236,6 +1143,27 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 
+function today() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(dateValue: string, days: number) {
+  const date = new Date(`${dateValue}T00:00:00`);
+  date.setDate(date.getDate() + days);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+
+
 function formatSupabaseError(
   err: unknown,
   fallback: string
@@ -1265,11 +1193,14 @@ function formatSupabaseError(
         : "",
     ].filter(Boolean);
 
-    if (parts.length > 0) return parts.join(" • ");
+    if (parts.length > 0) {
+      return parts.join(" • ");
+    }
   }
 
   return fallback;
 }
+
 
 function firstDayOfDate(value: string) {
   return `${String(value || "").slice(0, 7)}-01`;
