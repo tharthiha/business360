@@ -26,6 +26,7 @@ export default function AppSidebar({
   const router = useRouter();
 
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +108,32 @@ export default function AppSidebar({
     };
   }, [pathname]);
 
+  async function handleSignOut() {
+    if (signingOut) return;
+
+    setSigningOut(true);
+
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+
+      router.replace("/auth/login");
+      router.refresh();
+    } catch (error) {
+      console.error("[sign-out]", error);
+      setSigningOut(false);
+    }
+  }
+
+  const canOpenAnySettings =
+    normalizedRole === "owner" ||
+    canAccessPath(normalizedRole, "/settings/company") ||
+    canAccessPath(normalizedRole, "/settings/business") ||
+    canAccessPath(normalizedRole, "/settings/accounting") ||
+    canAccessPath(normalizedRole, "/settings/documents") ||
+    canAccessPath(normalizedRole, "/settings/users") ||
+    canAccessPath(normalizedRole, "/settings/security");
+
   return (
     <aside className="hidden w-64 flex-col border-r border-gray-200 bg-white lg:flex">
       <div className="flex h-16 items-center border-b border-gray-200 px-6">
@@ -158,11 +185,26 @@ export default function AppSidebar({
         </NavSection>
       </nav>
 
-      {canAccessPath(normalizedRole, "/settings") && (
-        <div className="border-t border-gray-200 p-4">
-          <RoleNavItem role={normalizedRole} href="/settings" label="Settings" />
-        </div>
-      )}
+      <div className="border-t border-gray-200 p-4">
+        {canOpenAnySettings && (
+          <Link
+            href="/settings"
+            className="mb-2 flex items-center rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900"
+          >
+            Settings
+          </Link>
+        )}
+
+        <button
+          type="button"
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <span>{signingOut ? "Signing out..." : "Sign Out"}</span>
+          <span aria-hidden="true">↗</span>
+        </button>
+      </div>
     </aside>
   );
 }

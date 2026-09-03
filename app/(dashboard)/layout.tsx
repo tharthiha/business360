@@ -11,10 +11,12 @@ import {
 
 import AppSidebar from "@/components/app-sidebar";
 import GlobalSearch from "@/components/global-search";
+import SignOutButton from "@/components/sign-out-button";
 import {
   createClient,
 } from "@/lib/supabase/server";
 import {
+  canAccessPath,
   normalizeRole,
 } from "@/lib/role-permissions";
 
@@ -75,6 +77,15 @@ export default async function DashboardLayout({
     role.charAt(0).toUpperCase() +
     role.slice(1);
 
+  const canOpenAnySettings =
+    role === "owner" ||
+    canAccessPath(role, "/settings/company") ||
+    canAccessPath(role, "/settings/business") ||
+    canAccessPath(role, "/settings/accounting") ||
+    canAccessPath(role, "/settings/documents") ||
+    canAccessPath(role, "/settings/users") ||
+    canAccessPath(role, "/settings/security");
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 print:min-h-0 print:bg-white">
       <div className="flex min-h-screen print:min-h-0 print:block">
@@ -90,7 +101,7 @@ export default async function DashboardLayout({
               <GlobalSearch />
             </div>
 
-            <div className="ml-auto flex shrink-0 gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <Link
                 href="/notifications"
                 className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
@@ -98,12 +109,20 @@ export default async function DashboardLayout({
                 Notifications
               </Link>
 
-              <Link
-                href="/settings"
-                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-              >
-                {roleLabel}
-              </Link>
+              {canOpenAnySettings ? (
+                <Link
+                  href="/settings"
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                >
+                  {roleLabel}
+                </Link>
+              ) : (
+                <span className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-600">
+                  {roleLabel}
+                </span>
+              )}
+
+              <SignOutButton />
             </div>
           </header>
 
