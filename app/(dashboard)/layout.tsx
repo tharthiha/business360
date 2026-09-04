@@ -104,6 +104,14 @@ export default async function DashboardLayout({
   const planStatus =
     subscription?.status || "active";
 
+  const { data: platformAdmin } =
+    await supabase.rpc(
+      "is_platform_admin",
+      {
+        p_required_role: null,
+      }
+    );
+
   const canOpenAnySettings =
     role === "owner" ||
     canAccessPath(role, "/settings/company") ||
@@ -129,12 +137,22 @@ export default async function DashboardLayout({
             </div>
 
             <div className="ml-auto flex shrink-0 items-center gap-2">
-              <div
+              {platformAdmin === true && (
+                <Link
+                  href="/platform-admin"
+                  className="hidden rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 lg:block"
+                >
+                  Platform Admin
+                </Link>
+              )}
+
+              <Link
+                href="/settings/plan"
                 title={`Subscription status: ${planStatus}`}
-                className="hidden rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 sm:block"
+                className="hidden rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 sm:block"
               >
                 Plan: {planName}
-              </div>
+              </Link>
 
               <Link
                 href="/notifications"

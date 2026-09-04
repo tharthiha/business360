@@ -10,6 +10,7 @@ const PUBLIC_PREFIXES = [
 ];
 
 const ONBOARDING_PREFIX = "/onboarding";
+const PLATFORM_ADMIN_PREFIX = "/platform-admin";
 
 const SELF_AUTHORIZED_API_PREFIXES = [
   "/api/ai",
@@ -62,6 +63,10 @@ export async function updateSession(request: NextRequest) {
     pathname === ONBOARDING_PREFIX ||
     pathname.startsWith(`${ONBOARDING_PREFIX}/`);
 
+  const isPlatformAdminArea =
+    pathname === PLATFORM_ADMIN_PREFIX ||
+    pathname.startsWith(`${PLATFORM_ADMIN_PREFIX}/`);
+
   const isSelfAuthorizedApi =
     SELF_AUTHORIZED_API_PREFIXES.some((prefix) =>
       pathname.startsWith(prefix)
@@ -94,13 +99,31 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  if (isPlatformAdminArea) {
+    const { data: isAdmin } =
+      await supabase.rpc(
+        "is_platform_admin",
+        {
+          p_required_role: null,
+        }
+      );
+
+    if (isAdmin === true) {
+      return supabaseResponse;
+    }
+
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
+    url.searchParams.set("access", "denied");
+    return NextResponse.redirect(url);
+  }
+
   const { data: profile } = await supabase
     .from("profiles")
     .select("company_id, role, is_active")
     .eq("id", userId)
     .maybeSingle();
 
-  // An existing inactive profile is truly disabled.
   if (profile?.is_active === false) {
     const url = request.nextUrl.clone();
     url.pathname = "/auth/disabled";
@@ -108,8 +131,6 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // A verified/authenticated first-time user may not have a profile or
-  // company yet. That user belongs in onboarding, not disabled access.
   if (!profile || !profile.company_id) {
     if (isOnboarding) {
       return supabaseResponse;
@@ -121,7 +142,6 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Already-onboarded users should not remain on onboarding.
   if (isOnboarding) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
