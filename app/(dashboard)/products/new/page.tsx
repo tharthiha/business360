@@ -402,14 +402,45 @@ export default function NewProductPage() {
       );
 
       router.refresh();
-    } catch (error) {
-      console.error(error);
+    } catch (error: any) {
+      console.error("Create product error:", error);
 
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not create product."
-      );
+      const rawMessage =
+        error?.message ||
+        error?.details ||
+        error?.hint ||
+        "";
+
+      if (
+        rawMessage.includes(
+          "PRODUCT_LIMIT_REACHED"
+        )
+      ) {
+        setMessage(
+          "You’ve reached your Maximum Products limit. Increase the company limit or upgrade the subscription plan."
+        );
+      } else if (
+        rawMessage.includes(
+          "PRODUCT_LIMIT_DISABLED"
+        )
+      ) {
+        setMessage(
+          "Product creation is not available for this company."
+        );
+      } else if (
+        rawMessage.includes(
+          "PRODUCT_LIMIT_NO_SUBSCRIPTION"
+        )
+      ) {
+        setMessage(
+          "This company does not have an active subscription."
+        );
+      } else {
+        setMessage(
+          rawMessage ||
+            "Could not create product."
+        );
+      }
     } finally {
       setSaving(false);
     }
