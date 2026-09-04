@@ -18,9 +18,7 @@ const SELF_AUTHORIZED_API_PREFIXES = [
 ];
 
 export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  });
+  let supabaseResponse = NextResponse.next({ request });
 
   if (!hasEnvVars) {
     return supabaseResponse;
@@ -39,9 +37,7 @@ export async function updateSession(request: NextRequest) {
             request.cookies.set(name, value)
           );
 
-          supabaseResponse = NextResponse.next({
-            request,
-          });
+          supabaseResponse = NextResponse.next({ request });
 
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
@@ -100,13 +96,9 @@ export async function updateSession(request: NextRequest) {
   }
 
   if (isPlatformAdminArea) {
-    const { data: isAdmin } =
-      await supabase.rpc(
-        "is_platform_admin",
-        {
-          p_required_role: null,
-        }
-      );
+    const { data: isAdmin } = await supabase.rpc("is_platform_admin", {
+      p_required_role: null,
+    });
 
     if (isAdmin === true) {
       return supabaseResponse;
@@ -138,6 +130,24 @@ export async function updateSession(request: NextRequest) {
 
     const url = request.nextUrl.clone();
     url.pathname = "/onboarding";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  const { data: platformRows } = await supabase.rpc(
+    "current_company_platform_status"
+  );
+
+  const platformStatus = Array.isArray(platformRows)
+    ? platformRows[0]
+    : platformRows;
+
+  if (
+    platformStatus?.is_suspended === true &&
+    pathname !== "/auth/company-suspended"
+  ) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/auth/company-suspended";
     url.search = "";
     return NextResponse.redirect(url);
   }

@@ -4,9 +4,11 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
 import {
+  addCompanyNote,
   assignCompanyPlan,
   clearCompanyOverride,
   setCompanyOverride,
+  setCompanySuspension,
 } from "../../actions";
 
 export const instant = false;
@@ -36,17 +38,24 @@ export default async function CompanyAdminPage({
     redirect("/dashboard");
   }
 
-  const [detailResult, plansResult] = await Promise.all([
+  const [
+    detailResult,
+    plansResult,
+    operationsResult,
+    notesResult,
+  ] = await Promise.all([
     supabase.rpc("admin_company_detail", { p_company_id: companyId }),
     supabase.rpc("admin_plan_catalog"),
+    supabase.rpc("admin_company_operations_summary"),
+    supabase.rpc("admin_company_notes", { p_company_id: companyId }),
   ]);
 
   if (detailResult.error) {
     notFound();
   }
 
-  if (plansResult.error) {
-    throw new Error("Could not load plan catalog.");
+  if (plansResult.error || operationsResult.error || notesResult.error) {
+    throw new Error("Could not load company administration data.");
   }
 
   const data = detailResult.data || {};
@@ -56,18 +65,28 @@ export default async function CompanyAdminPage({
   const members = Array.isArray(data.members) ? data.members : [];
   const features = Array.isArray(data.features) ? data.features : [];
   const plans = Array.isArray(plansResult.data) ? plansResult.data : [];
+  const notes = notesResult.data || [];
+
+  const operation = (operationsResult.data || []).find(
+    (row: any) => Number(row.company_id) === companyId
+  ) || {};
+
+  const { data: controls } = await supabase
+    .from("company_platform_controls")
+    .select("is_suspended, suspension_reason, suspended_at")
+    .eq("company_id", companyId)
+    .maybeSingle();
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-7 lg:px-8">
-      <div className="mx-auto max-w-[1420px] space-y-7">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mx-auto max-w-[1450px] space-y-7">
+        <div className="flex items-center justify-between gap-4">
           <Link
             href="/platform-admin"
             className="text-sm font-semibold text-indigo-700 hover:text-indigo-900"
           >
             ← Back to Control Center
           </Link>
-
           <div className="text-xs text-slate-400">
             Company #{company.id}
           </div>
@@ -88,24 +107,28 @@ export default async function CompanyAdminPage({
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-white/15 bg-white/10 px-5 py-4 backdrop-blur">
-                <div className="text-xs text-indigo-100">Current plan</div>
-                <div className="mt-1 text-xl font-semibold">
-                  {subscription.plan_name || "No plan"}
-                </div>
-                <div className="mt-1 text-xs capitalize text-indigo-100">
-                  {subscription.billing_source || "-"} • {subscription.status || "-"}
-                </div>
+              <div className="flex flex-wrap gap-3">
+                <InfoPill
+                  label="Health"
+                  value={`${operation.health_score ?? 0}/100`}
+                  sub={labelize(operation.health_status || "unknown")}
+                />
+                <InfoPill
+                  label="Current plan"
+                  value={subscription.plan_name || "No plan"}
+                  sub={`${subscription.billing_source || "-"} • ${subscription.status || "-"}`}
+                />
               </div>
             </div>
           </div>
 
-          <div className="grid gap-3 bg-slate-50 p-5 sm:grid-cols-5">
+          <div className="grid gap-3 bg-slate-50 p-5 sm:grid-cols-6">
             <MiniMetric label="Users" value={counts.users} />
             <MiniMetric label="Products" value={counts.products} />
             <MiniMetric label="Customers" value={counts.customers} />
             <MiniMetric label="Invoices" value={counts.invoices} />
             <MiniMetric label="Sales Orders" value={counts.sales_orders} />
+            <MiniMetric label="Last Activity" value={`${operation.days_since_activity ?? 0}d`} />
           </div>
         </section>
 
@@ -123,6 +146,58 @@ export default async function CompanyAdminPage({
 
         <section className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
           <div className="space-y-6">
+            <div
+              className={`rounded-3xl border p-6 shadow-sm ${
+                controls?.is_suspended
+                  ? "border-red-200 bg-red-50"
+                  : "border-slate-200 bg-white"
+              }`}
+            >
+              <div className="text-xs font-semibold uppercase tracking-wider text-red-600">
+                Access Control
+              </div>
+              <h2 className="mt-1 text-xl font-semibold text-slate-950">
+                {controls?.is_suspended ? "Company Suspended" : "Company Active"}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                Suspension blocks tenant access while keeping company data intact.
+              </p>
+
+              {controls?.is_suspended && (
+                <div className="mt-4 rounded-xl border border-red-200 bg-white px-4 py-3 text-sm text-red-700">
+                  {controls.suspension_reason || "No suspension reason provided."}
+                </div>
+              )}
+
+              <form action={setCompanySuspension} className="mt-5 space-y-3">
+                <input type="hidden" name="company_id" value={company.id} />
+                <input
+                  type="hidden"
+                  name="is_suspended"
+                  value={controls?.is_suspended ? "false" : "true"}
+                />
+
+                {!controls?.is_suspended && (
+                  <input
+                    name="reason"
+                    required
+                    placeholder="Reason for suspension..."
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                  />
+                )}
+
+                <button
+                  className={`w-full rounded-xl px-4 py-3 text-sm font-semibold text-white ${
+                    controls?.is_suspended
+                      ? "bg-emerald-600 hover:bg-emerald-700"
+                      : "bg-red-600 hover:bg-red-700"
+                  }`}
+                >
+                  {controls?.is_suspended ? "Reactivate Company" : "Suspend Company"}
+                </button>
+              </form>
+            </div>
+
             <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
                 Subscription
@@ -130,53 +205,41 @@ export default async function CompanyAdminPage({
               <h2 className="mt-1 text-xl font-semibold text-slate-950">
                 Plan Assignment
               </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Upgrade, downgrade or grant a complimentary plan.
-              </p>
 
               <form action={assignCompanyPlan} className="mt-5 space-y-4">
                 <input type="hidden" name="company_id" value={company.id} />
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-600">Plan</label>
-                  <select
-                    name="plan_key"
-                    defaultValue={subscription.plan_key || "free"}
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
-                  >
-                    {plans.map((plan: any) => (
-                      <option key={plan.plan_key} value={plan.plan_key}>
-                        {plan.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <select
+                  name="plan_key"
+                  defaultValue={subscription.plan_key || "free"}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                >
+                  {plans.map((plan: any) => (
+                    <option key={plan.plan_key} value={plan.plan_key}>
+                      {plan.name}
+                    </option>
+                  ))}
+                </select>
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-600">Billing source</label>
-                  <select
-                    name="billing_source"
-                    defaultValue={subscription.billing_source || "complimentary"}
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
-                  >
-                    <option value="free">Free</option>
-                    <option value="complimentary">Complimentary</option>
-                    <option value="manual">Manual</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
+                <select
+                  name="billing_source"
+                  defaultValue={subscription.billing_source || "complimentary"}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                >
+                  <option value="free">Free</option>
+                  <option value="complimentary">Complimentary</option>
+                  <option value="manual">Manual</option>
+                  <option value="other">Other</option>
+                </select>
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-600">Admin note</label>
-                  <input
-                    name="reason"
-                    defaultValue={subscription.granted_reason || ""}
-                    placeholder="Why is this plan being granted?"
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
-                  />
-                </div>
+                <input
+                  name="reason"
+                  defaultValue={subscription.granted_reason || ""}
+                  placeholder="Admin note / reason"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                />
 
-                <button className="w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800">
+                <button className="w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white">
                   Update Company Plan
                 </button>
               </form>
@@ -184,16 +247,40 @@ export default async function CompanyAdminPage({
 
             <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-xl font-semibold text-slate-950">
-                Company Profile
+                Support Notes
               </h2>
-              <dl className="mt-5 space-y-4 text-sm">
-                <Detail label="Email" value={company.email || "-"} />
-                <Detail label="Phone" value={company.phone || "-"} />
-                <Detail label="Country" value={company.country_code || "-"} />
-                <Detail label="Currency" value={company.default_currency || "-"} />
-                <Detail label="Timezone" value={company.timezone || "-"} />
-                <Detail label="Created" value={formatDate(company.created_at)} />
-              </dl>
+              <p className="mt-1 text-sm text-slate-500">
+                Internal NetVilla notes. Tenant users cannot see these.
+              </p>
+
+              <form action={addCompanyNote} className="mt-4">
+                <input type="hidden" name="company_id" value={company.id} />
+                <textarea
+                  name="note"
+                  required
+                  rows={3}
+                  placeholder="Add internal note..."
+                  className="w-full resize-none rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                />
+                <button className="mt-2 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">
+                  Add Note
+                </button>
+              </form>
+
+              <div className="mt-5 space-y-3">
+                {notes.map((note: any) => (
+                  <div key={note.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="text-sm leading-6 text-slate-700">{note.note}</div>
+                    <div className="mt-2 text-xs text-slate-400">
+                      {note.actor_email || "Platform admin"} • {formatDateTime(note.created_at)}
+                    </div>
+                  </div>
+                ))}
+
+                {notes.length === 0 && (
+                  <div className="text-sm text-slate-400">No support notes yet.</div>
+                )}
+              </div>
             </div>
 
             <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -221,18 +308,15 @@ export default async function CompanyAdminPage({
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
-                Company Overrides
-              </div>
-              <h2 className="mt-1 text-xl font-semibold text-slate-950">
-                Custom Limits & Access
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-slate-500">
-                Override a plan limit for this company only. You can optionally set an expiry date,
-                then the company automatically falls back to its plan default.
-              </p>
+            <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
+              Company Overrides
             </div>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">
+              Custom Limits & Access
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              Override this tenant only. Optional expiry returns the feature to its plan default.
+            </p>
 
             <div className="mt-6 space-y-4">
               {features.map((feature: any) => (
@@ -274,66 +358,46 @@ export default async function CompanyAdminPage({
                     <input type="hidden" name="company_id" value={company.id} />
                     <input type="hidden" name="feature_key" value={feature.feature_key} />
 
-                    <div>
-                      <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                        Access
-                      </label>
-                      <select
-                        name="enabled_override"
-                        defaultValue={
-                          feature.enabled_override == null
-                            ? ""
-                            : feature.enabled_override
-                            ? "true"
-                            : "false"
-                        }
-                        className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
-                      >
-                        <option value="">Use plan</option>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </select>
-                    </div>
+                    <select
+                      name="enabled_override"
+                      defaultValue={
+                        feature.enabled_override == null
+                          ? ""
+                          : feature.enabled_override
+                          ? "true"
+                          : "false"
+                      }
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                    >
+                      <option value="">Use plan</option>
+                      <option value="true">Enabled</option>
+                      <option value="false">Disabled</option>
+                    </select>
 
-                    <div>
-                      <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                        Custom limit
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        name="limit_integer_override"
-                        defaultValue={feature.limit_integer_override ?? ""}
-                        placeholder="Use plan"
-                        className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
-                      />
-                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      name="limit_integer_override"
+                      defaultValue={feature.limit_integer_override ?? ""}
+                      placeholder="Use plan"
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                    />
 
-                    <div>
-                      <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                        Expiry
-                      </label>
-                      <input
-                        type="datetime-local"
-                        name="expires_at"
-                        defaultValue={toLocalDateTime(feature.expires_at)}
-                        className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
-                      />
-                    </div>
+                    <input
+                      type="datetime-local"
+                      name="expires_at"
+                      defaultValue={toLocalDateTime(feature.expires_at)}
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                    />
 
-                    <div>
-                      <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                        Reason
-                      </label>
-                      <input
-                        name="reason"
-                        defaultValue={feature.override_reason || ""}
-                        placeholder="Promo, support, negotiated allowance..."
-                        className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
-                      />
-                    </div>
+                    <input
+                      name="reason"
+                      defaultValue={feature.override_reason || ""}
+                      placeholder="Reason..."
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                    />
 
-                    <button className="rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-indigo-700">
+                    <button className="rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white">
                       Save
                     </button>
                   </form>
@@ -342,7 +406,7 @@ export default async function CompanyAdminPage({
                     <form action={clearCompanyOverride} className="mt-3">
                       <input type="hidden" name="company_id" value={company.id} />
                       <input type="hidden" name="feature_key" value={feature.feature_key} />
-                      <button className="text-xs font-semibold text-red-600 hover:text-red-700">
+                      <button className="text-xs font-semibold text-red-600">
                         Reset to plan default
                       </button>
                     </form>
@@ -354,6 +418,24 @@ export default async function CompanyAdminPage({
         </section>
       </div>
     </main>
+  );
+}
+
+function InfoPill({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/15 bg-white/10 px-5 py-4 backdrop-blur">
+      <div className="text-xs text-indigo-100">{label}</div>
+      <div className="mt-1 text-xl font-semibold">{value}</div>
+      <div className="mt-1 text-xs text-indigo-100">{sub}</div>
+    </div>
   );
 }
 
@@ -370,33 +452,27 @@ function MiniMetric({
         {label}
       </div>
       <div className="mt-2 text-xl font-semibold text-slate-950">
-        {Number(value || 0).toLocaleString()}
+        {typeof value === "number"
+          ? Number(value || 0).toLocaleString()
+          : String(value ?? "-")}
       </div>
     </div>
   );
 }
 
-function Detail({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-5">
-      <dt className="text-slate-400">{label}</dt>
-      <dd className="text-right font-medium text-slate-800">{value}</dd>
-    </div>
-  );
+function labelize(value: string) {
+  return String(value || "-")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function formatDate(value?: string | null) {
+function formatDateTime(value?: string | null) {
   if (!value) return "-";
   try {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
-      new Date(value)
-    );
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(value));
   } catch {
     return value;
   }

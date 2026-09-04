@@ -11,6 +11,7 @@ function clean(value: FormDataEntryValue | null) {
 
 async function requirePlatformAdmin() {
   const supabase = await createClient();
+
   const { data, error } = await supabase.rpc("is_platform_admin", {
     p_required_role: null,
   });
@@ -141,4 +142,58 @@ export async function clearCompanyOverride(formData: FormData) {
   revalidatePath(`/platform-admin/companies/${companyId}`);
   revalidatePath("/platform-admin");
   redirect(`/platform-admin/companies/${companyId}?saved=override-cleared`);
+}
+
+export async function addCompanyNote(formData: FormData) {
+  const supabase = await requirePlatformAdmin();
+
+  const companyId = Number(clean(formData.get("company_id")));
+  const note = clean(formData.get("note"));
+
+  const { error } = await supabase.rpc("admin_add_company_note", {
+    p_company_id: companyId,
+    p_note: note,
+  });
+
+  if (error) {
+    redirect(
+      `/platform-admin/companies/${companyId}?error=${encodeURIComponent(
+        error.message
+      )}`
+    );
+  }
+
+  revalidatePath(`/platform-admin/companies/${companyId}`);
+  redirect(`/platform-admin/companies/${companyId}?saved=note`);
+}
+
+export async function setCompanySuspension(formData: FormData) {
+  const supabase = await requirePlatformAdmin();
+
+  const companyId = Number(clean(formData.get("company_id")));
+  const suspended = clean(formData.get("is_suspended")) === "true";
+  const reason = clean(formData.get("reason"));
+
+  const { error } = await supabase.rpc("admin_set_company_suspension", {
+    p_company_id: companyId,
+    p_is_suspended: suspended,
+    p_reason: reason || null,
+  });
+
+  if (error) {
+    redirect(
+      `/platform-admin/companies/${companyId}?error=${encodeURIComponent(
+        error.message
+      )}`
+    );
+  }
+
+  revalidatePath(`/platform-admin/companies/${companyId}`);
+  revalidatePath("/platform-admin");
+
+  redirect(
+    `/platform-admin/companies/${companyId}?saved=${
+      suspended ? "suspended" : "reactivated"
+    }`
+  );
 }

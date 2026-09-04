@@ -14,7 +14,6 @@ type CompanyRow = {
   company_id: number;
   company_name: string;
   country_code?: string | null;
-  created_at?: string | null;
   plan_key?: string | null;
   plan_name?: string | null;
   subscription_status?: string | null;
@@ -24,6 +23,17 @@ type CompanyRow = {
   customer_count: number;
   invoice_count: number;
   ai_usage_today: number;
+};
+
+type OpsRow = {
+  company_id: number;
+  last_activity_at?: string | null;
+  days_since_activity: number;
+  health_score: number;
+  health_status: string;
+  is_suspended: boolean;
+  suspension_reason?: string | null;
+  expiry_status: string;
 };
 
 export default async function PlatformAdminPage({
@@ -52,18 +62,21 @@ export default async function PlatformAdminPage({
     companiesResult,
     plansResult,
     actionsResult,
+    operationsResult,
   ] = await Promise.all([
     supabase.rpc("admin_platform_overview"),
     supabase.rpc("admin_company_list"),
     supabase.rpc("admin_plan_catalog"),
     supabase.rpc("admin_recent_actions", { p_limit: 12 }),
+    supabase.rpc("admin_company_operations_summary"),
   ]);
 
   if (
     overviewResult.error ||
     companiesResult.error ||
     plansResult.error ||
-    actionsResult.error
+    actionsResult.error ||
+    operationsResult.error
   ) {
     throw new Error("Could not load platform administration data.");
   }
@@ -72,6 +85,11 @@ export default async function PlatformAdminPage({
   const companies: CompanyRow[] = companiesResult.data || [];
   const plans = Array.isArray(plansResult.data) ? plansResult.data : [];
   const actions = actionsResult.data || [];
+  const operations: OpsRow[] = operationsResult.data || [];
+
+  const opsByCompany = new Map(
+    operations.map((row) => [Number(row.company_id), row])
+  );
 
   const query = String(params.q || "").trim().toLowerCase();
   const planFilter = String(params.plan || "").trim();
@@ -93,9 +111,13 @@ export default async function PlatformAdminPage({
     0
   );
 
+  const attentionCount = operations.filter(
+    (row) => row.health_status === "at_risk" || row.health_status === "suspended"
+  ).length;
+
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-7 lg:px-8">
-      <div className="mx-auto max-w-[1560px] space-y-7">
+      <div className="mx-auto max-w-[1600px] space-y-7">
         <header className="overflow-hidden rounded-3xl border border-indigo-900/20 bg-[radial-gradient(circle_at_top_right,_#4f46e5,_#1e1b4b_45%,_#020617)] p-7 text-white shadow-2xl shadow-indigo-950/15 lg:p-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div>
@@ -106,8 +128,7 @@ export default async function PlatformAdminPage({
                 Business360 Control Center
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-indigo-100/90">
-                Operate Business360 as a SaaS platform: subscriptions, usage,
-                company-level limits, plan configuration and platform oversight.
+                Operate tenants, subscriptions, usage, health and support controls from one place.
               </p>
             </div>
 
@@ -140,7 +161,7 @@ export default async function PlatformAdminPage({
           </div>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-8">
           <Metric label="Companies" value={overview.total_companies} hint="Total tenants" />
           <Metric label="Active" value={overview.active_subscriptions} hint="Live subscriptions" />
           <Metric label="Free" value={overview.free_companies} hint="Free tier" />
@@ -148,6 +169,7 @@ export default async function PlatformAdminPage({
           <Metric label="Users" value={overview.total_users} hint="Active members" />
           <Metric label="Products" value={overview.total_products} hint="Across tenants" />
           <Metric label="AI Today" value={totalAiToday} hint="Questions used" />
+          <Metric label="At Risk" value={attentionCount} hint="Needs attention" />
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -157,7 +179,7 @@ export default async function PlatformAdminPage({
                 Companies
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Review tenant health, usage and subscription controls.
+                Tenant health, last activity, usage and subscription controls.
               </p>
             </div>
 
@@ -191,6 +213,8 @@ export default async function PlatformAdminPage({
               <thead className="bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
                 <tr>
                   <th className="px-6 py-3.5">Company</th>
+                  <th className="px-5 py-3.5">Health</th>
+                  <th className="px-5 py-3.5">Last Activity</th>
                   <th className="px-5 py-3.5">Plan</th>
                   <th className="px-5 py-3.5">Usage</th>
                   <th className="px-5 py-3.5">Business Data</th>
@@ -200,108 +224,126 @@ export default async function PlatformAdminPage({
               </thead>
 
               <tbody className="divide-y divide-slate-100">
-                {visibleCompanies.map((company) => (
-                  <tr key={company.company_id} className="transition hover:bg-slate-50/70">
-                    <td className="px-6 py-5">
-                      <div className="font-semibold text-slate-950">
-                        {company.company_name}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-400">
-                        Company #{company.company_id} • {company.country_code || "-"}
-                      </div>
-                    </td>
+                {visibleCompanies.map((company) => {
+                  const ops = opsByCompany.get(Number(company.company_id));
 
-                    <td className="px-5 py-5">
-                      <span className="inline-flex rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
-                        {company.plan_name || "No plan"}
-                      </span>
-                      <div className="mt-2 text-xs capitalize text-slate-400">
-                        {company.billing_source || "-"} • {company.subscription_status || "-"}
-                      </div>
-                    </td>
+                  return (
+                    <tr key={company.company_id} className="transition hover:bg-slate-50/70">
+                      <td className="px-6 py-5">
+                        <div className="font-semibold text-slate-950">
+                          {company.company_name}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          Company #{company.company_id} • {company.country_code || "-"}
+                        </div>
 
-                    <td className="px-5 py-5">
-                      <div className="text-sm font-semibold text-slate-900">
-                        {company.ai_usage_today}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-400">
-                        AI questions today
-                      </div>
-                    </td>
+                        {ops?.expiry_status && ops.expiry_status !== "ok" && (
+                          <div className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold uppercase text-amber-700">
+                            {labelize(ops.expiry_status)}
+                          </div>
+                        )}
+                      </td>
 
-                    <td className="px-5 py-5">
-                      <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-xs">
-                        <Stat label="Users" value={company.user_count} />
-                        <Stat label="Products" value={company.product_count} />
-                        <Stat label="Customers" value={company.customer_count} />
-                        <Stat label="Invoices" value={company.invoice_count} />
-                      </div>
-                    </td>
-
-                    <td className="px-5 py-5">
-                      <form action={assignCompanyPlan} className="flex min-w-[330px] flex-wrap gap-2">
-                        <input type="hidden" name="company_id" value={company.company_id} />
-
-                        <select
-                          name="plan_key"
-                          defaultValue={company.plan_key || "free"}
-                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                        >
-                          {plans.map((plan: any) => (
-                            <option key={plan.plan_key} value={plan.plan_key}>
-                              {plan.name}
-                            </option>
-                          ))}
-                        </select>
-
-                        <select
-                          name="billing_source"
-                          defaultValue={
-                            company.billing_source === "free"
-                              ? "free"
-                              : company.billing_source || "complimentary"
-                          }
-                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                        >
-                          <option value="free">Free</option>
-                          <option value="complimentary">Complimentary</option>
-                          <option value="manual">Manual</option>
-                          <option value="other">Other</option>
-                        </select>
-
-                        <input
-                          type="hidden"
-                          name="reason"
-                          value="Platform admin plan change"
+                      <td className="px-5 py-5">
+                        <HealthBadge
+                          score={ops?.health_score ?? 0}
+                          status={ops?.health_status || "unknown"}
                         />
+                      </td>
 
-                        <button
-                          type="submit"
-                          className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                      <td className="px-5 py-5">
+                        <div className="text-sm font-semibold text-slate-800">
+                          {ops?.days_since_activity ?? 0}d ago
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {formatDate(ops?.last_activity_at)}
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-5">
+                        <span className="inline-flex rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+                          {company.plan_name || "No plan"}
+                        </span>
+                        <div className="mt-2 text-xs capitalize text-slate-400">
+                          {company.billing_source || "-"} • {company.subscription_status || "-"}
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-5">
+                        <div className="text-sm font-semibold text-slate-900">
+                          {company.ai_usage_today}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          AI today
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-5">
+                        <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-xs">
+                          <Stat label="Users" value={company.user_count} />
+                          <Stat label="Products" value={company.product_count} />
+                          <Stat label="Customers" value={company.customer_count} />
+                          <Stat label="Invoices" value={company.invoice_count} />
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-5">
+                        <form action={assignCompanyPlan} className="flex min-w-[330px] flex-wrap gap-2">
+                          <input type="hidden" name="company_id" value={company.company_id} />
+
+                          <select
+                            name="plan_key"
+                            defaultValue={company.plan_key || "free"}
+                            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800"
+                          >
+                            {plans.map((plan: any) => (
+                              <option key={plan.plan_key} value={plan.plan_key}>
+                                {plan.name}
+                              </option>
+                            ))}
+                          </select>
+
+                          <select
+                            name="billing_source"
+                            defaultValue={
+                              company.billing_source === "free"
+                                ? "free"
+                                : company.billing_source || "complimentary"
+                            }
+                            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800"
+                          >
+                            <option value="free">Free</option>
+                            <option value="complimentary">Complimentary</option>
+                            <option value="manual">Manual</option>
+                            <option value="other">Other</option>
+                          </select>
+
+                          <input
+                            type="hidden"
+                            name="reason"
+                            value="Platform admin plan change"
+                          />
+
+                          <button
+                            type="submit"
+                            className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                          >
+                            Save
+                          </button>
+                        </form>
+                      </td>
+
+                      <td className="px-5 py-5 text-right">
+                        <Link
+                          href={`/platform-admin/companies/${company.company_id}`}
+                          className="inline-flex rounded-xl border border-indigo-200 bg-white px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
                         >
-                          Save
-                        </button>
-                      </form>
-                    </td>
-
-                    <td className="px-5 py-5 text-right">
-                      <Link
-                        href={`/platform-admin/companies/${company.company_id}`}
-                        className="inline-flex rounded-xl border border-indigo-200 bg-white px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
-                      >
-                        Manage →
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-
-                {visibleCompanies.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-sm text-slate-400">
-                      No companies match this filter.
-                    </td>
-                  </tr>
-                )}
+                          Manage →
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -316,7 +358,7 @@ export default async function PlatformAdminPage({
               Plan Builder
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Change global plan allowances. Updates apply without redeploying Business360.
+              Change global plan allowances without redeploying Business360.
             </p>
           </div>
 
@@ -327,27 +369,15 @@ export default async function PlatformAdminPage({
                 className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
               >
                 <div className="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-indigo-50/40 px-6 py-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
-                        {plan.plan_key}
-                      </div>
-                      <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">
-                        {plan.name}
-                      </h3>
-                      <p className="mt-2 text-sm leading-6 text-slate-500">
-                        {plan.description}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right">
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                        Visibility
-                      </div>
-                      <div className="mt-1 text-xs font-semibold text-slate-700">
-                        {plan.is_public ? "Public" : "Private"}
-                      </div>
-                    </div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
+                    {plan.plan_key}
                   </div>
+                  <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">
+                    {plan.name}
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    {plan.description}
+                  </p>
                 </div>
 
                 <div className="space-y-3 p-5">
@@ -366,14 +396,13 @@ export default async function PlatformAdminPage({
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
                           {feature.feature_key}
-                          {feature.reset_period ? ` • ${feature.reset_period}` : ""}
                         </div>
                       </div>
 
                       <select
                         name="enabled"
                         defaultValue={feature.enabled === false ? "false" : "true"}
-                        className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-800 outline-none focus:border-indigo-500"
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-800"
                       >
                         <option value="true">Enabled</option>
                         <option value="false">Disabled</option>
@@ -386,7 +415,7 @@ export default async function PlatformAdminPage({
                           min="0"
                           defaultValue={feature.limit_integer ?? ""}
                           placeholder="Unlimited"
-                          className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500"
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-900"
                         />
                       ) : (
                         <input name="limit_integer" type="hidden" value="" />
@@ -433,12 +462,6 @@ export default async function PlatformAdminPage({
                 </div>
               </div>
             ))}
-
-            {actions.length === 0 && (
-              <div className="px-6 py-10 text-center text-sm text-slate-400">
-                No platform admin changes recorded yet.
-              </div>
-            )}
           </div>
         </section>
       </div>
@@ -463,9 +486,7 @@ function Metric({
       <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
         {Number(value || 0).toLocaleString()}
       </div>
-      <div className="mt-1 text-xs text-slate-400">
-        {hint}
-      </div>
+      <div className="mt-1 text-xs text-slate-400">{hint}</div>
     </div>
   );
 }
@@ -485,13 +506,53 @@ function Stat({
   );
 }
 
+function HealthBadge({
+  score,
+  status,
+}: {
+  score: number;
+  status: string;
+}) {
+  const cls =
+    status === "healthy"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : status === "watch"
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : status === "suspended"
+      ? "border-slate-300 bg-slate-100 text-slate-700"
+      : "border-red-200 bg-red-50 text-red-700";
+
+  return (
+    <div>
+      <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${cls}`}>
+        {score}/100
+      </span>
+      <div className="mt-2 text-xs text-slate-400">
+        {labelize(status)}
+      </div>
+    </div>
+  );
+}
+
 function labelize(value: string) {
   return String(value || "-")
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function formatDateTime(value: string) {
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+      new Date(value)
+    );
+  } catch {
+    return value;
+  }
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
   try {
     return new Intl.DateTimeFormat(undefined, {
       dateStyle: "medium",
