@@ -13,8 +13,7 @@ export async function GET() {
     }
 
     const usage = await getAIUsageStatus(
-      context.supabase,
-      Number(context.profile.company_id)
+      context.supabase
     );
 
     return NextResponse.json(usage);
@@ -29,7 +28,6 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  let reservedCompanyId: number | null = null;
   let reserved = false;
   let supabaseForRelease: Awaited<ReturnType<typeof createClient>> | null = null;
 
@@ -54,13 +52,11 @@ export async function POST(request: Request) {
     }
 
     const companyId = Number(profile.company_id);
-    reservedCompanyId = companyId;
 
     const { data: reserveRows, error: reserveError } =
       await supabase.rpc("increment_company_feature_usage", {
         p_feature_key: AI_FEATURE_KEY,
         p_increment: 1,
-        p_company_id: companyId,
       });
 
     if (reserveError) {
@@ -77,8 +73,7 @@ export async function POST(request: Request) {
       : reserveRows;
 
     const usageBeforeAnswer = await getAIUsageStatus(
-      supabase,
-      companyId
+      supabase
     );
 
     if (!reserve?.allowed) {
@@ -241,7 +236,7 @@ export async function POST(request: Request) {
 
     if (queryErrors.length > 0) {
       console.error("[business360-ai-data]", queryErrors);
-      await releaseReservation(supabase, companyId);
+      await releaseReservation(supabase);
       reserved = false;
 
       return NextResponse.json(
@@ -486,7 +481,7 @@ export async function POST(request: Request) {
     const apiKey = process.env.OPENAI_API_KEY;
 
     if (!apiKey) {
-      await releaseReservation(supabase, companyId);
+      await releaseReservation(supabase);
       reserved = false;
 
       return NextResponse.json(
@@ -529,7 +524,7 @@ export async function POST(request: Request) {
 
     if (!response.ok) {
       console.error("[business360-ai]", result);
-      await releaseReservation(supabase, companyId);
+      await releaseReservation(supabase);
       reserved = false;
 
       return NextResponse.json(
@@ -548,7 +543,7 @@ export async function POST(request: Request) {
         : extractOutputText(result);
 
     if (!answer) {
-      await releaseReservation(supabase, companyId);
+      await releaseReservation(supabase);
       reserved = false;
 
       return NextResponse.json(
@@ -560,8 +555,7 @@ export async function POST(request: Request) {
     reserved = false;
 
     const usage = await getAIUsageStatus(
-      supabase,
-      companyId
+      supabase
     );
 
     return NextResponse.json({ answer, usage });
@@ -570,13 +564,11 @@ export async function POST(request: Request) {
 
     if (
       reserved &&
-      supabaseForRelease &&
-      reservedCompanyId
+      supabaseForRelease
     ) {
       try {
         await releaseReservation(
-          supabaseForRelease,
-          reservedCompanyId
+          supabaseForRelease
         );
       } catch (releaseError) {
         console.error("[business360-ai-release]", releaseError);
@@ -648,8 +640,7 @@ async function getAIContext() {
 }
 
 async function getAIUsageStatus(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  companyId: number
+  supabase: Awaited<ReturnType<typeof createClient>>
 ) {
   const [
     subscriptionResult,
@@ -659,11 +650,9 @@ async function getAIUsageStatus(
     supabase.rpc("current_company_subscription"),
     supabase.rpc("get_effective_company_feature", {
       p_feature_key: AI_FEATURE_KEY,
-      p_company_id: companyId,
     }),
     supabase.rpc("get_company_feature_usage", {
       p_feature_key: AI_FEATURE_KEY,
-      p_company_id: companyId,
     }),
   ]);
 
@@ -718,15 +707,13 @@ async function getAIUsageStatus(
 }
 
 async function releaseReservation(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  companyId: number
+  supabase: Awaited<ReturnType<typeof createClient>>
 ) {
   const { error } = await supabase.rpc(
     "decrement_company_feature_usage",
     {
       p_feature_key: AI_FEATURE_KEY,
       p_decrement: 1,
-      p_company_id: companyId,
     }
   );
 
