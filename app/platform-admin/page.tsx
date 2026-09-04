@@ -32,21 +32,16 @@ export default async function PlatformAdminPage({
   searchParams: Promise<{
     error?: string;
     saved?: string;
+    q?: string;
+    plan?: string;
   }>;
 }) {
-  const params =
-    await searchParams;
+  const params = await searchParams;
+  const supabase = await createClient();
 
-  const supabase =
-    await createClient();
-
-  const { data: allowed } =
-    await supabase.rpc(
-      "is_platform_admin",
-      {
-        p_required_role: null,
-      }
-    );
+  const { data: allowed } = await supabase.rpc("is_platform_admin", {
+    p_required_role: null,
+  });
 
   if (allowed !== true) {
     redirect("/dashboard");
@@ -56,214 +51,256 @@ export default async function PlatformAdminPage({
     overviewResult,
     companiesResult,
     plansResult,
+    actionsResult,
   ] = await Promise.all([
-    supabase.rpc(
-      "admin_platform_overview"
-    ),
-    supabase.rpc(
-      "admin_company_list"
-    ),
-    supabase.rpc(
-      "admin_plan_catalog"
-    ),
+    supabase.rpc("admin_platform_overview"),
+    supabase.rpc("admin_company_list"),
+    supabase.rpc("admin_plan_catalog"),
+    supabase.rpc("admin_recent_actions", { p_limit: 12 }),
   ]);
 
   if (
     overviewResult.error ||
     companiesResult.error ||
-    plansResult.error
+    plansResult.error ||
+    actionsResult.error
   ) {
-    throw new Error(
-      "Could not load platform administration data."
-    );
+    throw new Error("Could not load platform administration data.");
   }
 
-  const overview =
-    overviewResult.data || {};
+  const overview = overviewResult.data || {};
+  const companies: CompanyRow[] = companiesResult.data || [];
+  const plans = Array.isArray(plansResult.data) ? plansResult.data : [];
+  const actions = actionsResult.data || [];
 
-  const companies: CompanyRow[] =
-    companiesResult.data || [];
+  const query = String(params.q || "").trim().toLowerCase();
+  const planFilter = String(params.plan || "").trim();
 
-  const plans =
-    Array.isArray(plansResult.data)
-      ? plansResult.data
-      : [];
+  const visibleCompanies = companies.filter((company) => {
+    const matchesQuery =
+      !query ||
+      company.company_name.toLowerCase().includes(query) ||
+      String(company.company_id).includes(query);
+
+    const matchesPlan =
+      !planFilter || company.plan_key === planFilter;
+
+    return matchesQuery && matchesPlan;
+  });
+
+  const totalAiToday = companies.reduce(
+    (sum, row) => sum + Number(row.ai_usage_today || 0),
+    0
+  );
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-8 lg:px-8">
-      <div className="mx-auto max-w-[1500px] space-y-7">
-        <header className="overflow-hidden rounded-3xl bg-gradient-to-r from-slate-950 via-indigo-950 to-indigo-800 p-7 text-white shadow-xl">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+    <main className="min-h-screen bg-slate-50 px-4 py-7 lg:px-8">
+      <div className="mx-auto max-w-[1560px] space-y-7">
+        <header className="overflow-hidden rounded-3xl border border-indigo-900/20 bg-[radial-gradient(circle_at_top_right,_#4f46e5,_#1e1b4b_45%,_#020617)] p-7 text-white shadow-2xl shadow-indigo-950/15 lg:p-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-200">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-200">
                 NetVilla Platform Administration
               </div>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight">
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight lg:text-4xl">
                 Business360 Control Center
               </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-indigo-100">
-                Manage companies, plans, limits and platform usage without changing application code.
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-indigo-100/90">
+                Operate Business360 as a SaaS platform: subscriptions, usage,
+                company-level limits, plan configuration and platform oversight.
               </p>
             </div>
 
-            <Link
-              href="/dashboard"
-              className="rounded-xl bg-white/10 px-4 py-2.5 text-sm font-semibold ring-1 ring-white/15 hover:bg-white/15"
-            >
-              Open Business360 →
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/dashboard"
+                className="rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur hover:bg-white/15"
+              >
+                Open Business360
+              </Link>
+              <Link
+                href="/settings/plan"
+                className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-indigo-50"
+              >
+                My Plan
+              </Link>
+            </div>
           </div>
         </header>
 
         {params.error && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {decodeURIComponent(
-              params.error
-            )}
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">
+            {decodeURIComponent(params.error)}
           </div>
         )}
 
         {params.saved && (
-          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            Changes saved.
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-700">
+            Platform changes saved successfully.
           </div>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-          <Metric
-            label="Companies"
-            value={overview.total_companies}
-          />
-          <Metric
-            label="Active"
-            value={overview.active_subscriptions}
-          />
-          <Metric
-            label="Free"
-            value={overview.free_companies}
-          />
-          <Metric
-            label="Paid / Comp"
-            value={overview.paid_or_complimentary_companies}
-          />
-          <Metric
-            label="Users"
-            value={overview.total_users}
-          />
-          <Metric
-            label="Products"
-            value={overview.total_products}
-          />
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
+          <Metric label="Companies" value={overview.total_companies} hint="Total tenants" />
+          <Metric label="Active" value={overview.active_subscriptions} hint="Live subscriptions" />
+          <Metric label="Free" value={overview.free_companies} hint="Free tier" />
+          <Metric label="Paid / Comp" value={overview.paid_or_complimentary_companies} hint="Non-free plans" />
+          <Metric label="Users" value={overview.total_users} hint="Active members" />
+          <Metric label="Products" value={overview.total_products} hint="Across tenants" />
+          <Metric label="AI Today" value={totalAiToday} hint="Questions used" />
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-6 py-5">
-            <h2 className="text-lg font-semibold text-slate-950">
-              Companies
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Tenant counts and current subscription status.
-            </p>
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight text-slate-950">
+                Companies
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Review tenant health, usage and subscription controls.
+              </p>
+            </div>
+
+            <form className="flex flex-col gap-2 sm:flex-row">
+              <input
+                name="q"
+                defaultValue={params.q || ""}
+                placeholder="Search company or ID..."
+                className="min-w-[220px] rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+              />
+              <select
+                name="plan"
+                defaultValue={params.plan || ""}
+                className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-500"
+              >
+                <option value="">All plans</option>
+                {plans.map((plan: any) => (
+                  <option key={plan.plan_key} value={plan.plan_key}>
+                    {plan.name}
+                  </option>
+                ))}
+              </select>
+              <button className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white">
+                Filter
+              </button>
+            </form>
           </div>
 
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-400">
+              <thead className="bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
                 <tr>
-                  <th className="px-5 py-3">Company</th>
-                  <th className="px-5 py-3">Plan</th>
-                  <th className="px-5 py-3">Users</th>
-                  <th className="px-5 py-3">Products</th>
-                  <th className="px-5 py-3">Customers</th>
-                  <th className="px-5 py-3">Invoices</th>
-                  <th className="px-5 py-3">AI today</th>
-                  <th className="px-5 py-3">Change Plan</th>
+                  <th className="px-6 py-3.5">Company</th>
+                  <th className="px-5 py-3.5">Plan</th>
+                  <th className="px-5 py-3.5">Usage</th>
+                  <th className="px-5 py-3.5">Business Data</th>
+                  <th className="px-5 py-3.5">Subscription Control</th>
+                  <th className="px-5 py-3.5"></th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-100">
-                {companies.map(
-                  (company) => (
-                    <tr key={company.company_id}>
-                      <td className="px-5 py-4">
-                        <div className="font-semibold text-slate-900">
-                          {company.company_name}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          #{company.company_id} • {company.country_code || "-"}
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">
-                        <div className="font-medium text-slate-800">
-                          {company.plan_name || "No plan"}
-                        </div>
-                        <div className="mt-1 text-xs capitalize text-slate-400">
-                          {company.billing_source || "-"}
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">{company.user_count}</td>
-                      <td className="px-5 py-4">{company.product_count}</td>
-                      <td className="px-5 py-4">{company.customer_count}</td>
-                      <td className="px-5 py-4">{company.invoice_count}</td>
-                      <td className="px-5 py-4">{company.ai_usage_today}</td>
-                      <td className="px-5 py-4">
-                        <form
-                          action={assignCompanyPlan}
-                          className="flex min-w-[290px] gap-2"
+                {visibleCompanies.map((company) => (
+                  <tr key={company.company_id} className="transition hover:bg-slate-50/70">
+                    <td className="px-6 py-5">
+                      <div className="font-semibold text-slate-950">
+                        {company.company_name}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        Company #{company.company_id} • {company.country_code || "-"}
+                      </div>
+                    </td>
+
+                    <td className="px-5 py-5">
+                      <span className="inline-flex rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+                        {company.plan_name || "No plan"}
+                      </span>
+                      <div className="mt-2 text-xs capitalize text-slate-400">
+                        {company.billing_source || "-"} • {company.subscription_status || "-"}
+                      </div>
+                    </td>
+
+                    <td className="px-5 py-5">
+                      <div className="text-sm font-semibold text-slate-900">
+                        {company.ai_usage_today}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        AI questions today
+                      </div>
+                    </td>
+
+                    <td className="px-5 py-5">
+                      <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-xs">
+                        <Stat label="Users" value={company.user_count} />
+                        <Stat label="Products" value={company.product_count} />
+                        <Stat label="Customers" value={company.customer_count} />
+                        <Stat label="Invoices" value={company.invoice_count} />
+                      </div>
+                    </td>
+
+                    <td className="px-5 py-5">
+                      <form action={assignCompanyPlan} className="flex min-w-[330px] flex-wrap gap-2">
+                        <input type="hidden" name="company_id" value={company.company_id} />
+
+                        <select
+                          name="plan_key"
+                          defaultValue={company.plan_key || "free"}
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800"
                         >
-                          <input
-                            type="hidden"
-                            name="company_id"
-                            value={company.company_id}
-                          />
+                          {plans.map((plan: any) => (
+                            <option key={plan.plan_key} value={plan.plan_key}>
+                              {plan.name}
+                            </option>
+                          ))}
+                        </select>
 
-                          <select
-                            name="plan_key"
-                            defaultValue={company.plan_key || "free"}
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs"
-                          >
-                            {plans.map(
-                              (plan: any) => (
-                                <option
-                                  key={plan.plan_key}
-                                  value={plan.plan_key}
-                                >
-                                  {plan.name}
-                                </option>
-                              )
-                            )}
-                          </select>
+                        <select
+                          name="billing_source"
+                          defaultValue={
+                            company.billing_source === "free"
+                              ? "free"
+                              : company.billing_source || "complimentary"
+                          }
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800"
+                        >
+                          <option value="free">Free</option>
+                          <option value="complimentary">Complimentary</option>
+                          <option value="manual">Manual</option>
+                          <option value="other">Other</option>
+                        </select>
 
-                          <select
-                            name="billing_source"
-                            defaultValue={
-                              company.billing_source === "free"
-                                ? "free"
-                                : "complimentary"
-                            }
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs"
-                          >
-                            <option value="free">Free</option>
-                            <option value="complimentary">Complimentary</option>
-                            <option value="manual">Manual</option>
-                          </select>
+                        <input
+                          type="hidden"
+                          name="reason"
+                          value="Platform admin plan change"
+                        />
 
-                          <input
-                            type="hidden"
-                            name="reason"
-                            value="Platform admin plan change"
-                          />
+                        <button
+                          type="submit"
+                          className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                        >
+                          Save
+                        </button>
+                      </form>
+                    </td>
 
-                          <button
-                            type="submit"
-                            className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                          >
-                            Save
-                          </button>
-                        </form>
-                      </td>
-                    </tr>
-                  )
+                    <td className="px-5 py-5 text-right">
+                      <Link
+                        href={`/platform-admin/companies/${company.company_id}`}
+                        className="inline-flex rounded-xl border border-indigo-200 bg-white px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                      >
+                        Manage →
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+
+                {visibleCompanies.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center text-sm text-slate-400">
+                      No companies match this filter.
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>
@@ -272,11 +309,14 @@ export default async function PlatformAdminPage({
 
         <section className="space-y-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-950">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-600">
+              Product Configuration
+            </div>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">
               Plan Builder
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Change plan limits here. No redeploy is required.
+              Change global plan allowances. Updates apply without redeploying Business360.
             </p>
           </div>
 
@@ -284,92 +324,121 @@ export default async function PlatformAdminPage({
             {plans.map((plan: any) => (
               <div
                 key={plan.plan_key}
-                className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
               >
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
-                    {plan.plan_key}
+                <div className="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-indigo-50/40 px-6 py-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
+                        {plan.plan_key}
+                      </div>
+                      <h3 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">
+                        {plan.name}
+                      </h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        {plan.description}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                        Visibility
+                      </div>
+                      <div className="mt-1 text-xs font-semibold text-slate-700">
+                        {plan.is_public ? "Public" : "Private"}
+                      </div>
+                    </div>
                   </div>
-                  <h3 className="mt-1 text-xl font-semibold text-slate-950">
-                    {plan.name}
-                  </h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {plan.description}
-                  </p>
                 </div>
 
-                <div className="mt-5 space-y-3">
-                  {(plan.features || []).map(
-                    (feature: any) => (
-                      <form
-                        key={feature.feature_key}
-                        action={updatePlanFeature}
-                        className="grid gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4 sm:grid-cols-[1fr_auto_auto_auto] sm:items-center"
-                      >
-                        <input
-                          type="hidden"
-                          name="plan_key"
-                          value={plan.plan_key}
-                        />
-                        <input
-                          type="hidden"
-                          name="feature_key"
-                          value={feature.feature_key}
-                        />
+                <div className="space-y-3 p-5">
+                  {(plan.features || []).map((feature: any) => (
+                    <form
+                      key={feature.feature_key}
+                      action={updatePlanFeature}
+                      className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:grid-cols-[1fr_130px_120px_80px] sm:items-center"
+                    >
+                      <input type="hidden" name="plan_key" value={plan.plan_key} />
+                      <input type="hidden" name="feature_key" value={feature.feature_key} />
 
-                        <div>
-                          <div className="text-sm font-semibold text-slate-900">
-                            {feature.name}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-400">
-                            {feature.feature_key}
-                          </div>
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">
+                          {feature.name}
                         </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {feature.feature_key}
+                          {feature.reset_period ? ` • ${feature.reset_period}` : ""}
+                        </div>
+                      </div>
 
-                        <select
-                          name="enabled"
-                          defaultValue={
-                            feature.enabled === false
-                              ? "false"
-                              : "true"
-                          }
-                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs"
-                        >
-                          <option value="true">Enabled</option>
-                          <option value="false">Disabled</option>
-                        </select>
+                      <select
+                        name="enabled"
+                        defaultValue={feature.enabled === false ? "false" : "true"}
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-800 outline-none focus:border-indigo-500"
+                      >
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled</option>
+                      </select>
 
-                        {feature.value_type === "integer" ? (
-                          <input
-                            name="limit_integer"
-                            type="number"
-                            min="0"
-                            defaultValue={
-                              feature.limit_integer ?? ""
-                            }
-                            placeholder="Unlimited"
-                            className="w-28 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs"
-                          />
-                        ) : (
-                          <input
-                            name="limit_integer"
-                            type="hidden"
-                            value=""
-                          />
-                        )}
+                      {feature.value_type === "integer" ? (
+                        <input
+                          name="limit_integer"
+                          type="number"
+                          min="0"
+                          defaultValue={feature.limit_integer ?? ""}
+                          placeholder="Unlimited"
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500"
+                        />
+                      ) : (
+                        <input name="limit_integer" type="hidden" value="" />
+                      )}
 
-                        <button
-                          type="submit"
-                          className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white"
-                        >
-                          Save
-                        </button>
-                      </form>
-                    )
-                  )}
+                      <button
+                        type="submit"
+                        className="rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                      >
+                        Save
+                      </button>
+                    </form>
+                  ))}
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-6 py-5">
+            <h2 className="text-xl font-semibold text-slate-950">
+              Recent Admin Activity
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Administrative changes are recorded for accountability.
+            </p>
+          </div>
+
+          <div className="divide-y divide-slate-100">
+            {actions.map((item: any) => (
+              <div key={item.id} className="flex flex-col gap-2 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">
+                    {labelize(item.action)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {item.actor_email || "Platform admin"}
+                    {item.company_name ? ` • ${item.company_name}` : ""}
+                  </div>
+                </div>
+                <div className="text-xs text-slate-400">
+                  {formatDateTime(item.created_at)}
+                </div>
+              </div>
+            ))}
+
+            {actions.length === 0 && (
+              <div className="px-6 py-10 text-center text-sm text-slate-400">
+                No platform admin changes recorded yet.
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -380,18 +449,55 @@ export default async function PlatformAdminPage({
 function Metric({
   label,
   value,
+  hint,
 }: {
   label: string;
   value: unknown;
+  hint: string;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
         {label}
       </div>
       <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
         {Number(value || 0).toLocaleString()}
       </div>
+      <div className="mt-1 text-xs text-slate-400">
+        {hint}
+      </div>
     </div>
   );
+}
+
+function Stat({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-slate-400">{label}</span>
+      <span className="font-semibold text-slate-800">{value}</span>
+    </div>
+  );
+}
+
+function labelize(value: string) {
+  return String(value || "-")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatDateTime(value: string) {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
 }
