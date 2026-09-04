@@ -26,7 +26,6 @@ export default function AppSidebar({
   const router = useRouter();
 
   const [unreadNotifications, setUnreadNotifications] = useState(0);
-  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,23 +107,6 @@ export default function AppSidebar({
     };
   }, [pathname]);
 
-  async function handleSignOut() {
-    if (signingOut) return;
-
-    setSigningOut(true);
-
-    try {
-      const supabase = createClient();
-      await supabase.auth.signOut();
-
-      router.replace("/auth/login");
-      router.refresh();
-    } catch (error) {
-      console.error("[sign-out]", error);
-      setSigningOut(false);
-    }
-  }
-
   const canOpenAnySettings =
     normalizedRole === "owner" ||
     canAccessPath(normalizedRole, "/settings/company") ||
@@ -195,15 +177,15 @@ export default function AppSidebar({
           </Link>
         )}
 
-        <button
-          type="button"
-          onClick={handleSignOut}
-          disabled={signingOut}
-          className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <span>{signingOut ? "Signing out..." : "Sign Out"}</span>
-          <span aria-hidden="true">↗</span>
-        </button>
+        <form action="/auth/sign-out" method="post">
+          <button
+            type="submit"
+            className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-medium text-red-600 transition hover:bg-red-50"
+          >
+            <span>Sign Out</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+        </form>
       </div>
     </aside>
   );
