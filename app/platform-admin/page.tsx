@@ -10,32 +10,6 @@ import {
 
 export const instant = false;
 
-type CompanyRow = {
-  company_id: number;
-  company_name: string;
-  country_code?: string | null;
-  plan_key?: string | null;
-  plan_name?: string | null;
-  subscription_status?: string | null;
-  billing_source?: string | null;
-  user_count: number;
-  product_count: number;
-  customer_count: number;
-  invoice_count: number;
-  ai_usage_today: number;
-};
-
-type OpsRow = {
-  company_id: number;
-  last_activity_at?: string | null;
-  days_since_activity: number;
-  health_score: number;
-  health_status: string;
-  is_suspended: boolean;
-  suspension_reason?: string | null;
-  expiry_status: string;
-};
-
 export default async function PlatformAdminPage({
   searchParams,
 }: {
@@ -63,12 +37,16 @@ export default async function PlatformAdminPage({
     plansResult,
     actionsResult,
     operationsResult,
+    revenueResult,
+    billingResult,
   ] = await Promise.all([
     supabase.rpc("admin_platform_overview"),
     supabase.rpc("admin_company_list"),
     supabase.rpc("admin_plan_catalog"),
     supabase.rpc("admin_recent_actions", { p_limit: 12 }),
     supabase.rpc("admin_company_operations_summary"),
+    supabase.rpc("admin_revenue_overview"),
+    supabase.rpc("admin_company_billing_summary"),
   ]);
 
   if (
@@ -76,25 +54,52 @@ export default async function PlatformAdminPage({
     companiesResult.error ||
     plansResult.error ||
     actionsResult.error ||
-    operationsResult.error
+    operationsResult.error ||
+    revenueResult.error ||
+    billingResult.error
   ) {
     throw new Error("Could not load platform administration data.");
   }
 
   const overview = overviewResult.data || {};
-  const companies: CompanyRow[] = companiesResult.data || [];
+  const companies = companiesResult.data || [];
   const plans = Array.isArray(plansResult.data) ? plansResult.data : [];
   const actions = actionsResult.data || [];
-  const operations: OpsRow[] = operationsResult.data || [];
+  const operations = operationsResult.data || [];
+  const revenue = revenueResult.data || {};
+  const billingRows = billingResult.data || [];
 
-  const opsByCompany = new Map(
-    operations.map((row) => [Number(row.company_id), row])
+  type CompanyOperationsRow = {
+    company_id: number | string;
+    health_score?: number | null;
+    health_status?: string | null;
+  };
+
+  type CompanyBillingRow = {
+    company_id: number | string;
+    normalized_mrr?: number | string | null;
+    price_currency?: string | null;
+    billing_status?: string | null;
+  };
+
+  const opsByCompany = new Map<number, CompanyOperationsRow>(
+    (operations as CompanyOperationsRow[]).map((row) => [
+      Number(row.company_id),
+      row,
+    ])
+  );
+
+  const billingByCompany = new Map<number, CompanyBillingRow>(
+    (billingRows as CompanyBillingRow[]).map((row) => [
+      Number(row.company_id),
+      row,
+    ])
   );
 
   const query = String(params.q || "").trim().toLowerCase();
   const planFilter = String(params.plan || "").trim();
 
-  const visibleCompanies = companies.filter((company) => {
+  const visibleCompanies = companies.filter((company: any) => {
     const matchesQuery =
       !query ||
       company.company_name.toLowerCase().includes(query) ||
@@ -107,12 +112,14 @@ export default async function PlatformAdminPage({
   });
 
   const totalAiToday = companies.reduce(
-    (sum, row) => sum + Number(row.ai_usage_today || 0),
+    (sum: number, row: any) => sum + Number(row.ai_usage_today || 0),
     0
   );
 
   const attentionCount = operations.filter(
-    (row) => row.health_status === "at_risk" || row.health_status === "suspended"
+    (row: any) =>
+      row.health_status === "at_risk" ||
+      row.health_status === "suspended"
   ).length;
 
   return (
@@ -128,7 +135,7 @@ export default async function PlatformAdminPage({
                 Business360 Control Center
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-indigo-100/90">
-                Operate tenants, subscriptions, usage, health and support controls from one place.
+                SaaS operations, tenant health, subscriptions, revenue and support controls.
               </p>
             </div>
 
@@ -172,6 +179,39 @@ export default async function PlatformAdminPage({
           <Metric label="At Risk" value={attentionCount} hint="Needs attention" />
         </section>
 
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <RevenueMetric
+            label="MRR"
+            value={formatMoney(revenue.mrr, "USD")}
+            hint="Normalized monthly revenue"
+          />
+          <RevenueMetric
+            label="ARR"
+            value={formatMoney(revenue.arr, "USD")}
+            hint="Annualized revenue"
+          />
+          <RevenueMetric
+            label="Paid"
+            value={revenue.paid_companies}
+            hint="Revenue-generating tenants"
+          />
+          <RevenueMetric
+            label="Trials"
+            value={revenue.trial_companies}
+            hint="Trialing subscriptions"
+          />
+          <RevenueMetric
+            label="Expiring"
+            value={revenue.expiring_14d}
+            hint="Next 14 days"
+          />
+          <RevenueMetric
+            label="Complimentary"
+            value={revenue.complimentary_companies}
+            hint="Granted access"
+          />
+        </section>
+
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
@@ -179,7 +219,7 @@ export default async function PlatformAdminPage({
                 Companies
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Tenant health, last activity, usage and subscription controls.
+                Health, billing readiness, usage and subscription control.
               </p>
             </div>
 
@@ -188,12 +228,12 @@ export default async function PlatformAdminPage({
                 name="q"
                 defaultValue={params.q || ""}
                 placeholder="Search company or ID..."
-                className="min-w-[220px] rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                className="min-w-[220px] rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
               />
               <select
                 name="plan"
                 defaultValue={params.plan || ""}
-                className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-500"
+                className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
               >
                 <option value="">All plans</option>
                 {plans.map((plan: any) => (
@@ -214,8 +254,8 @@ export default async function PlatformAdminPage({
                 <tr>
                   <th className="px-6 py-3.5">Company</th>
                   <th className="px-5 py-3.5">Health</th>
-                  <th className="px-5 py-3.5">Last Activity</th>
                   <th className="px-5 py-3.5">Plan</th>
+                  <th className="px-5 py-3.5">Billing</th>
                   <th className="px-5 py-3.5">Usage</th>
                   <th className="px-5 py-3.5">Business Data</th>
                   <th className="px-5 py-3.5">Subscription Control</th>
@@ -224,11 +264,12 @@ export default async function PlatformAdminPage({
               </thead>
 
               <tbody className="divide-y divide-slate-100">
-                {visibleCompanies.map((company) => {
+                {visibleCompanies.map((company: any) => {
                   const ops = opsByCompany.get(Number(company.company_id));
+                  const billing = billingByCompany.get(Number(company.company_id));
 
                   return (
-                    <tr key={company.company_id} className="transition hover:bg-slate-50/70">
+                    <tr key={company.company_id} className="hover:bg-slate-50/70">
                       <td className="px-6 py-5">
                         <div className="font-semibold text-slate-950">
                           {company.company_name}
@@ -236,12 +277,6 @@ export default async function PlatformAdminPage({
                         <div className="mt-1 text-xs text-slate-400">
                           Company #{company.company_id} • {company.country_code || "-"}
                         </div>
-
-                        {ops?.expiry_status && ops.expiry_status !== "ok" && (
-                          <div className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold uppercase text-amber-700">
-                            {labelize(ops.expiry_status)}
-                          </div>
-                        )}
                       </td>
 
                       <td className="px-5 py-5">
@@ -249,15 +284,6 @@ export default async function PlatformAdminPage({
                           score={ops?.health_score ?? 0}
                           status={ops?.health_status || "unknown"}
                         />
-                      </td>
-
-                      <td className="px-5 py-5">
-                        <div className="text-sm font-semibold text-slate-800">
-                          {ops?.days_since_activity ?? 0}d ago
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {formatDate(ops?.last_activity_at)}
-                        </div>
                       </td>
 
                       <td className="px-5 py-5">
@@ -271,11 +297,21 @@ export default async function PlatformAdminPage({
 
                       <td className="px-5 py-5">
                         <div className="text-sm font-semibold text-slate-900">
+                          {formatMoney(
+                            billing?.normalized_mrr || 0,
+                            billing?.price_currency || "USD"
+                          )}
+                        </div>
+                        <div className="mt-1 text-xs capitalize text-slate-400">
+                          {billing?.billing_status || "not connected"}
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-5">
+                        <div className="text-sm font-semibold text-slate-900">
                           {company.ai_usage_today}
                         </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          AI today
-                        </div>
+                        <div className="mt-1 text-xs text-slate-400">AI today</div>
                       </td>
 
                       <td className="px-5 py-5">
@@ -290,7 +326,6 @@ export default async function PlatformAdminPage({
                       <td className="px-5 py-5">
                         <form action={assignCompanyPlan} className="flex min-w-[330px] flex-wrap gap-2">
                           <input type="hidden" name="company_id" value={company.company_id} />
-
                           <select
                             name="plan_key"
                             defaultValue={company.plan_key || "free"}
@@ -305,11 +340,7 @@ export default async function PlatformAdminPage({
 
                           <select
                             name="billing_source"
-                            defaultValue={
-                              company.billing_source === "free"
-                                ? "free"
-                                : company.billing_source || "complimentary"
-                            }
+                            defaultValue={company.billing_source || "free"}
                             className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800"
                           >
                             <option value="free">Free</option>
@@ -318,16 +349,9 @@ export default async function PlatformAdminPage({
                             <option value="other">Other</option>
                           </select>
 
-                          <input
-                            type="hidden"
-                            name="reason"
-                            value="Platform admin plan change"
-                          />
+                          <input type="hidden" name="reason" value="Platform admin plan change" />
 
-                          <button
-                            type="submit"
-                            className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800"
-                          >
+                          <button className="rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white">
                             Save
                           </button>
                         </form>
@@ -421,10 +445,7 @@ export default async function PlatformAdminPage({
                         <input name="limit_integer" type="hidden" value="" />
                       )}
 
-                      <button
-                        type="submit"
-                        className="rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-indigo-700"
-                      >
+                      <button className="rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white">
                         Save
                       </button>
                     </form>
@@ -440,9 +461,6 @@ export default async function PlatformAdminPage({
             <h2 className="text-xl font-semibold text-slate-950">
               Recent Admin Activity
             </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Administrative changes are recorded for accountability.
-            </p>
           </div>
 
           <div className="divide-y divide-slate-100">
@@ -469,15 +487,7 @@ export default async function PlatformAdminPage({
   );
 }
 
-function Metric({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: unknown;
-  hint: string;
-}) {
+function Metric({ label, value, hint }: { label: string; value: unknown; hint: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
@@ -491,13 +501,21 @@ function Metric({
   );
 }
 
-function Stat({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
+function RevenueMetric({ label, value, hint }: { label: string; value: unknown; hint: string }) {
+  return (
+    <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-white to-indigo-50/50 p-5 shadow-sm">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-indigo-500">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+        {String(value ?? "0")}
+      </div>
+      <div className="mt-1 text-xs text-slate-400">{hint}</div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-slate-400">{label}</span>
@@ -506,13 +524,7 @@ function Stat({
   );
 }
 
-function HealthBadge({
-  score,
-  status,
-}: {
-  score: number;
-  status: string;
-}) {
+function HealthBadge({ score, status }: { score: number; status: string }) {
   const cls =
     status === "healthy"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -527,28 +539,28 @@ function HealthBadge({
       <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${cls}`}>
         {score}/100
       </span>
-      <div className="mt-2 text-xs text-slate-400">
-        {labelize(status)}
-      </div>
+      <div className="mt-2 text-xs text-slate-400">{labelize(status)}</div>
     </div>
   );
+}
+
+function formatMoney(value: unknown, currency: string) {
+  const amount = Number(value || 0);
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency || "USD",
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${currency || "USD"} ${amount.toFixed(2)}`;
+  }
 }
 
 function labelize(value: string) {
   return String(value || "-")
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function formatDate(value?: string | null) {
-  if (!value) return "-";
-  try {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
-      new Date(value)
-    );
-  } catch {
-    return value;
-  }
 }
 
 function formatDateTime(value?: string | null) {

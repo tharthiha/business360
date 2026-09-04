@@ -9,6 +9,7 @@ import {
   clearCompanyOverride,
   setCompanyOverride,
   setCompanySuspension,
+  updateBillingProfile,
 } from "../../actions";
 
 export const instant = false;
@@ -43,18 +44,28 @@ export default async function CompanyAdminPage({
     plansResult,
     operationsResult,
     notesResult,
+    statusResult,
+    billingResult,
   ] = await Promise.all([
     supabase.rpc("admin_company_detail", { p_company_id: companyId }),
     supabase.rpc("admin_plan_catalog"),
     supabase.rpc("admin_company_operations_summary"),
     supabase.rpc("admin_company_notes", { p_company_id: companyId }),
+    supabase.rpc("admin_company_platform_status", { p_company_id: companyId }),
+    supabase.rpc("admin_company_billing_summary"),
   ]);
 
   if (detailResult.error) {
     notFound();
   }
 
-  if (plansResult.error || operationsResult.error || notesResult.error) {
+  if (
+    plansResult.error ||
+    operationsResult.error ||
+    notesResult.error ||
+    statusResult.error ||
+    billingResult.error
+  ) {
     throw new Error("Could not load company administration data.");
   }
 
@@ -71,25 +82,22 @@ export default async function CompanyAdminPage({
     (row: any) => Number(row.company_id) === companyId
   ) || {};
 
-  const { data: controls } = await supabase
-    .from("company_platform_controls")
-    .select("is_suspended, suspension_reason, suspended_at")
-    .eq("company_id", companyId)
-    .maybeSingle();
+  const controls = Array.isArray(statusResult.data)
+    ? statusResult.data[0]
+    : statusResult.data;
+
+  const billing = (billingResult.data || []).find(
+    (row: any) => Number(row.company_id) === companyId
+  ) || {};
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-7 lg:px-8">
       <div className="mx-auto max-w-[1450px] space-y-7">
         <div className="flex items-center justify-between gap-4">
-          <Link
-            href="/platform-admin"
-            className="text-sm font-semibold text-indigo-700 hover:text-indigo-900"
-          >
+          <Link href="/platform-admin" className="text-sm font-semibold text-indigo-700">
             ← Back to Control Center
           </Link>
-          <div className="text-xs text-slate-400">
-            Company #{company.id}
-          </div>
+          <div className="text-xs text-slate-400">Company #{company.id}</div>
         </div>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -114,9 +122,14 @@ export default async function CompanyAdminPage({
                   sub={labelize(operation.health_status || "unknown")}
                 />
                 <InfoPill
-                  label="Current plan"
+                  label="Plan"
                   value={subscription.plan_name || "No plan"}
                   sub={`${subscription.billing_source || "-"} • ${subscription.status || "-"}`}
+                />
+                <InfoPill
+                  label="MRR"
+                  value={formatMoney(billing.normalized_mrr || 0, billing.price_currency || "USD")}
+                  sub={billing.billing_status || "not connected"}
                 />
               </div>
             </div>
@@ -160,14 +173,8 @@ export default async function CompanyAdminPage({
                 {controls?.is_suspended ? "Company Suspended" : "Company Active"}
               </h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                Suspension blocks tenant access while keeping company data intact.
+                Suspension blocks tenant pages and APIs while keeping data intact.
               </p>
-
-              {controls?.is_suspended && (
-                <div className="mt-4 rounded-xl border border-red-200 bg-white px-4 py-3 text-sm text-red-700">
-                  {controls.suspension_reason || "No suspension reason provided."}
-                </div>
-              )}
 
               <form action={setCompanySuspension} className="mt-5 space-y-3">
                 <input type="hidden" name="company_id" value={company.id} />
@@ -189,11 +196,88 @@ export default async function CompanyAdminPage({
                 <button
                   className={`w-full rounded-xl px-4 py-3 text-sm font-semibold text-white ${
                     controls?.is_suspended
-                      ? "bg-emerald-600 hover:bg-emerald-700"
-                      : "bg-red-600 hover:bg-red-700"
+                      ? "bg-emerald-600"
+                      : "bg-red-600"
                   }`}
                 >
                   {controls?.is_suspended ? "Reactivate Company" : "Suspend Company"}
+                </button>
+              </form>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
+                Billing
+              </div>
+              <h2 className="mt-1 text-xl font-semibold text-slate-950">
+                Billing Profile
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Provider-ready billing metadata. Stripe/Paddle can connect later.
+              </p>
+
+              <form action={updateBillingProfile} className="mt-5 space-y-4">
+                <input type="hidden" name="company_id" value={company.id} />
+
+                <input
+                  name="billing_email"
+                  defaultValue={company.email || ""}
+                  placeholder="Billing email"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                />
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <select
+                    name="provider"
+                    defaultValue={billing.provider || ""}
+                    className="rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                  >
+                    <option value="">No provider</option>
+                    <option value="stripe">Stripe</option>
+                    <option value="paddle">Paddle</option>
+                    <option value="manual">Manual</option>
+                  </select>
+
+                  <select
+                    name="billing_status"
+                    defaultValue={billing.billing_status || "not_connected"}
+                    className="rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                  >
+                    <option value="not_connected">Not connected</option>
+                    <option value="active">Active</option>
+                    <option value="past_due">Past due</option>
+                    <option value="canceled">Canceled</option>
+                  </select>
+                </div>
+
+                <input
+                  name="provider_customer_id"
+                  placeholder="Provider customer ID"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                />
+
+                <input
+                  name="provider_subscription_id"
+                  placeholder="Provider subscription ID"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                />
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <input
+                    name="tax_country_code"
+                    defaultValue={company.country_code || ""}
+                    placeholder="Tax country"
+                    className="rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                  />
+                  <input
+                    name="tax_id"
+                    placeholder="Tax ID"
+                    className="rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900"
+                  />
+                </div>
+
+                <button className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">
+                  Save Billing Profile
                 </button>
               </form>
             </div>
@@ -249,9 +333,6 @@ export default async function CompanyAdminPage({
               <h2 className="text-xl font-semibold text-slate-950">
                 Support Notes
               </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Internal NetVilla notes. Tenant users cannot see these.
-              </p>
 
               <form action={addCompanyNote} className="mt-4">
                 <input type="hidden" name="company_id" value={company.id} />
@@ -276,10 +357,6 @@ export default async function CompanyAdminPage({
                     </div>
                   </div>
                 ))}
-
-                {notes.length === 0 && (
-                  <div className="text-sm text-slate-400">No support notes yet.</div>
-                )}
               </div>
             </div>
 
@@ -314,9 +391,6 @@ export default async function CompanyAdminPage({
             <h2 className="mt-1 text-xl font-semibold text-slate-950">
               Custom Limits & Access
             </h2>
-            <p className="mt-1 text-sm leading-6 text-slate-500">
-              Override this tenant only. Optional expiry returns the feature to its plan default.
-            </p>
 
             <div className="mt-6 space-y-4">
               {features.map((feature: any) => (
@@ -328,33 +402,26 @@ export default async function CompanyAdminPage({
                       : "border-slate-200 bg-slate-50/60"
                   }`}
                 >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-slate-950">
                         {feature.name}
                       </div>
                       <div className="mt-1 text-xs text-slate-400">
-                        {feature.feature_key} • Plan limit:{" "}
-                        {feature.plan_limit_integer == null
-                          ? "Unlimited"
-                          : feature.plan_limit_integer}
+                        Plan limit: {feature.plan_limit_integer ?? "Unlimited"}
                       </div>
                     </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                    <div className="flex gap-2">
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold ring-1 ring-slate-200">
                         Usage: {feature.usage_count}
                       </span>
                       <span className="rounded-full bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white">
-                        Effective:{" "}
-                        {feature.effective_limit_integer == null
-                          ? "Unlimited"
-                          : feature.effective_limit_integer}
+                        Effective: {feature.effective_limit_integer ?? "Unlimited"}
                       </span>
                     </div>
                   </div>
 
-                  <form action={setCompanyOverride} className="mt-4 grid gap-3 lg:grid-cols-[130px_130px_170px_1fr_90px] lg:items-end">
+                  <form action={setCompanyOverride} className="mt-4 grid gap-3 lg:grid-cols-[130px_130px_170px_1fr_90px]">
                     <input type="hidden" name="company_id" value={company.id} />
                     <input type="hidden" name="feature_key" value={feature.feature_key} />
 
@@ -367,7 +434,7 @@ export default async function CompanyAdminPage({
                           ? "true"
                           : "false"
                       }
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs"
                     >
                       <option value="">Use plan</option>
                       <option value="true">Enabled</option>
@@ -376,25 +443,25 @@ export default async function CompanyAdminPage({
 
                     <input
                       type="number"
-                      min="0"
                       name="limit_integer_override"
+                      min="0"
                       defaultValue={feature.limit_integer_override ?? ""}
                       placeholder="Use plan"
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs"
                     />
 
                     <input
                       type="datetime-local"
                       name="expires_at"
                       defaultValue={toLocalDateTime(feature.expires_at)}
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs"
                     />
 
                     <input
                       name="reason"
                       defaultValue={feature.override_reason || ""}
                       placeholder="Reason..."
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900"
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs"
                     />
 
                     <button className="rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white">
@@ -421,15 +488,7 @@ export default async function CompanyAdminPage({
   );
 }
 
-function InfoPill({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-}) {
+function InfoPill({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
     <div className="rounded-2xl border border-white/15 bg-white/10 px-5 py-4 backdrop-blur">
       <div className="text-xs text-indigo-100">{label}</div>
@@ -439,25 +498,30 @@ function InfoPill({
   );
 }
 
-function MiniMetric({
-  label,
-  value,
-}: {
-  label: string;
-  value: unknown;
-}) {
+function MiniMetric({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
         {label}
       </div>
       <div className="mt-2 text-xl font-semibold text-slate-950">
-        {typeof value === "number"
-          ? Number(value || 0).toLocaleString()
-          : String(value ?? "-")}
+        {typeof value === "number" ? Number(value || 0).toLocaleString() : String(value ?? "-")}
       </div>
     </div>
   );
+}
+
+function formatMoney(value: unknown, currency: string) {
+  const amount = Number(value || 0);
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency || "USD",
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${currency || "USD"} ${amount.toFixed(2)}`;
+  }
 }
 
 function labelize(value: string) {

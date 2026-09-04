@@ -197,3 +197,39 @@ export async function setCompanySuspension(formData: FormData) {
     }`
   );
 }
+
+export async function updateBillingProfile(formData: FormData) {
+  const supabase = await requirePlatformAdmin();
+
+  const companyId = Number(clean(formData.get("company_id")));
+
+  const { error } = await supabase.rpc(
+    "admin_update_company_billing_profile",
+    {
+      p_company_id: companyId,
+      p_billing_email: clean(formData.get("billing_email")) || null,
+      p_provider: clean(formData.get("provider")) || null,
+      p_provider_customer_id:
+        clean(formData.get("provider_customer_id")) || null,
+      p_provider_subscription_id:
+        clean(formData.get("provider_subscription_id")) || null,
+      p_tax_country_code:
+        clean(formData.get("tax_country_code")) || null,
+      p_tax_id: clean(formData.get("tax_id")) || null,
+      p_billing_status:
+        clean(formData.get("billing_status")) || "not_connected",
+    }
+  );
+
+  if (error) {
+    redirect(
+      `/platform-admin/companies/${companyId}?error=${encodeURIComponent(
+        error.message
+      )}`
+    );
+  }
+
+  revalidatePath(`/platform-admin/companies/${companyId}`);
+  revalidatePath("/platform-admin");
+  redirect(`/platform-admin/companies/${companyId}?saved=billing`);
+}
