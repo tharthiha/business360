@@ -1,33 +1,30 @@
 import { NextResponse } from "next/server";
-import type { EmailOtpType } from "@supabase/supabase-js";
+
 import { createClient } from "@/lib/supabase/server";
+
+function safeNext(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/onboarding";
+  }
+
+  return value;
+}
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const tokenHash = url.searchParams.get("token_hash");
-  const type = url.searchParams.get("type") as EmailOtpType | null;
-  let next = url.searchParams.get("next") || "/auth/invite";
+  const code = url.searchParams.get("code");
+  const next = safeNext(url.searchParams.get("next"));
 
-  if (!next.startsWith("/")) next = "/auth/invite";
+  if (code) {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
 
-  if (!tokenHash || !type) {
-    return NextResponse.redirect(
-      new URL("/auth/login?error=invalid_invite_link", url.origin)
-    );
+    if (!error) {
+      return NextResponse.redirect(new URL(next, url.origin));
+    }
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.verifyOtp({
-    token_hash: tokenHash,
-    type,
-  });
-
-  if (error) {
-    console.error("[auth-confirm]", error.message);
-    return NextResponse.redirect(
-      new URL("/auth/login?error=invite_verification_failed", url.origin)
-    );
-  }
-
-  return NextResponse.redirect(new URL(next, url.origin));
+  return NextResponse.redirect(
+    new URL("/auth/login?error=Email verification could not be completed.", url.origin)
+  );
 }

@@ -48,6 +48,7 @@ export default async function DashboardLayout({
   } = await supabase
     .from("profiles")
     .select(`
+      company_id,
       role,
       is_active,
       full_name,
@@ -59,8 +60,18 @@ export default async function DashboardLayout({
     )
     .maybeSingle();
 
+  // A verified first-time user has no company/profile yet.
+  // That is onboarding, not a disabled account.
   if (
     !profile ||
+    !profile.company_id
+  ) {
+    redirect(
+      "/onboarding"
+    );
+  }
+
+  if (
     profile.is_active === false
   ) {
     redirect(
