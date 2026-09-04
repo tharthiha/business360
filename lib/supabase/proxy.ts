@@ -9,6 +9,8 @@ const PUBLIC_PREFIXES = [
   "/login",
 ];
 
+const ONBOARDING_PREFIX = "/onboarding";
+
 const SELF_AUTHORIZED_API_PREFIXES = [
   "/api/ai",
   "/api/settings/users/invite",
@@ -56,6 +58,10 @@ export async function updateSession(request: NextRequest) {
     pathname === "/" ||
     PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 
+  const isOnboarding =
+    pathname === ONBOARDING_PREFIX ||
+    pathname.startsWith(`${ONBOARDING_PREFIX}/`);
+
   const isSelfAuthorizedApi =
     SELF_AUTHORIZED_API_PREFIXES.some((prefix) =>
       pathname.startsWith(prefix)
@@ -90,13 +96,35 @@ export async function updateSession(request: NextRequest) {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role, is_active")
+    .select("company_id, role, is_active")
     .eq("id", userId)
     .maybeSingle();
 
-  if (!profile || profile.is_active === false) {
+  // An existing inactive profile is truly disabled.
+  if (profile?.is_active === false) {
     const url = request.nextUrl.clone();
     url.pathname = "/auth/disabled";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  // A verified/authenticated first-time user may not have a profile or
+  // company yet. That user belongs in onboarding, not disabled access.
+  if (!profile || !profile.company_id) {
+    if (isOnboarding) {
+      return supabaseResponse;
+    }
+
+    const url = request.nextUrl.clone();
+    url.pathname = "/onboarding";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  // Already-onboarded users should not remain on onboarding.
+  if (isOnboarding) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
     url.search = "";
     return NextResponse.redirect(url);
   }
