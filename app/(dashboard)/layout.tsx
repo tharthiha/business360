@@ -60,8 +60,6 @@ export default async function DashboardLayout({
     )
     .maybeSingle();
 
-  // A verified first-time user has no company/profile yet.
-  // That is onboarding, not a disabled account.
   if (
     !profile ||
     !profile.company_id
@@ -88,6 +86,24 @@ export default async function DashboardLayout({
     role.charAt(0).toUpperCase() +
     role.slice(1);
 
+  const { data: subscriptionRows } =
+    await supabase.rpc(
+      "current_company_subscription"
+    );
+
+  const subscription =
+    Array.isArray(subscriptionRows)
+      ? subscriptionRows[0]
+      : subscriptionRows;
+
+  const planName =
+    subscription?.plan_name ||
+    subscription?.plan_key ||
+    "Free";
+
+  const planStatus =
+    subscription?.status || "active";
+
   const canOpenAnySettings =
     role === "owner" ||
     canAccessPath(role, "/settings/company") ||
@@ -113,6 +129,13 @@ export default async function DashboardLayout({
             </div>
 
             <div className="ml-auto flex shrink-0 items-center gap-2">
+              <div
+                title={`Subscription status: ${planStatus}`}
+                className="hidden rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 sm:block"
+              >
+                Plan: {planName}
+              </div>
+
               <Link
                 href="/notifications"
                 className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"

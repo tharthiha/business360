@@ -2,47 +2,46 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessPath, normalizeRole } from "@/lib/role-permissions";
 
-export async function POST(request: Request) {
+const AI_FEATURE_KEY = "ai_questions_daily";
+
+export async function GET() {
   try {
-    const supabase = await createClient();
+    const context = await getAIContext();
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      return NextResponse.json(
-        { error: "You must be signed in." },
-        { status: 401 }
-      );
+    if ("response" in context) {
+      return context.response;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("company_id, role, is_active")
-      .eq("id", user.id)
-      .single();
+    const usage = await getAIUsageStatus(
+      context.supabase,
+      Number(context.profile.company_id)
+    );
 
-    if (
-      profileError ||
-      !profile?.company_id ||
-      profile.is_active === false
-    ) {
-      return NextResponse.json(
-        { error: "Active company profile not found." },
-        { status: 403 }
-      );
+    return NextResponse.json(usage);
+  } catch (error) {
+    console.error("[business360-ai-status]", error);
+
+    return NextResponse.json(
+      { error: "Could not load AI usage." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  let reservedCompanyId: number | null = null;
+  let reserved = false;
+  let supabaseForRelease: Awaited<ReturnType<typeof createClient>> | null = null;
+
+  try {
+    const context = await getAIContext();
+
+    if ("response" in context) {
+      return context.response;
     }
 
-    const role = normalizeRole(profile.role);
-
-    if (!canAccessPath(role, "/ai")) {
-      return NextResponse.json(
-        { error: "Your role does not have access to AI Assistant." },
-        { status: 403 }
-      );
-    }
+    const { supabase, profile, role } = context;
+    supabaseForRelease = supabase;
 
     const body = await request.json();
     const message = String(body?.message || "").trim();
@@ -55,6 +54,48 @@ export async function POST(request: Request) {
     }
 
     const companyId = Number(profile.company_id);
+    reservedCompanyId = companyId;
+
+    const { data: reserveRows, error: reserveError } =
+      await supabase.rpc("increment_company_feature_usage", {
+        p_feature_key: AI_FEATURE_KEY,
+        p_increment: 1,
+        p_company_id: companyId,
+      });
+
+    if (reserveError) {
+      console.error("[business360-ai-quota]", reserveError);
+
+      return NextResponse.json(
+        { error: "Could not verify your AI plan limit." },
+        { status: 500 }
+      );
+    }
+
+    const reserve = Array.isArray(reserveRows)
+      ? reserveRows[0]
+      : reserveRows;
+
+    const usageBeforeAnswer = await getAIUsageStatus(
+      supabase,
+      companyId
+    );
+
+    if (!reserve?.allowed) {
+      return NextResponse.json(
+        {
+          error:
+            reserve?.limit_integer == null
+              ? "AI Assistant is not enabled on your current plan."
+              : `Daily AI limit reached. You have used ${usageBeforeAnswer.used} of ${reserve.limit_integer} questions today.`,
+          usage: usageBeforeAnswer,
+          code: "AI_LIMIT_REACHED",
+        },
+        { status: 429 }
+      );
+    }
+
+    reserved = true;
 
     const [
       companyResult,
@@ -200,6 +241,8 @@ export async function POST(request: Request) {
 
     if (queryErrors.length > 0) {
       console.error("[business360-ai-data]", queryErrors);
+      await releaseReservation(supabase, companyId);
+      reserved = false;
 
       return NextResponse.json(
         {
@@ -443,6 +486,9 @@ export async function POST(request: Request) {
     const apiKey = process.env.OPENAI_API_KEY;
 
     if (!apiKey) {
+      await releaseReservation(supabase, companyId);
+      reserved = false;
+
       return NextResponse.json(
         { error: "OPENAI_API_KEY is not configured on the server." },
         { status: 500 }
@@ -483,6 +529,8 @@ export async function POST(request: Request) {
 
     if (!response.ok) {
       console.error("[business360-ai]", result);
+      await releaseReservation(supabase, companyId);
+      reserved = false;
 
       return NextResponse.json(
         {
@@ -500,15 +548,40 @@ export async function POST(request: Request) {
         : extractOutputText(result);
 
     if (!answer) {
+      await releaseReservation(supabase, companyId);
+      reserved = false;
+
       return NextResponse.json(
         { error: "AI Assistant returned an empty response." },
         { status: 502 }
       );
     }
 
-    return NextResponse.json({ answer });
+    reserved = false;
+
+    const usage = await getAIUsageStatus(
+      supabase,
+      companyId
+    );
+
+    return NextResponse.json({ answer, usage });
   } catch (error) {
     console.error("[business360-ai]", error);
+
+    if (
+      reserved &&
+      supabaseForRelease &&
+      reservedCompanyId
+    ) {
+      try {
+        await releaseReservation(
+          supabaseForRelease,
+          reservedCompanyId
+        );
+      } catch (releaseError) {
+        console.error("[business360-ai-release]", releaseError);
+      }
+    }
 
     return NextResponse.json(
       {
@@ -517,6 +590,148 @@ export async function POST(request: Request) {
       },
       { status: 500 }
     );
+  }
+}
+
+async function getAIContext() {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return {
+      response: NextResponse.json(
+        { error: "You must be signed in." },
+        { status: 401 }
+      ),
+    };
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("company_id, role, is_active")
+    .eq("id", user.id)
+    .single();
+
+  if (
+    profileError ||
+    !profile?.company_id ||
+    profile.is_active === false
+  ) {
+    return {
+      response: NextResponse.json(
+        { error: "Active company profile not found." },
+        { status: 403 }
+      ),
+    };
+  }
+
+  const role = normalizeRole(profile.role);
+
+  if (!canAccessPath(role, "/ai")) {
+    return {
+      response: NextResponse.json(
+        { error: "Your role does not have access to AI Assistant." },
+        { status: 403 }
+      ),
+    };
+  }
+
+  return {
+    supabase,
+    profile,
+    role,
+  };
+}
+
+async function getAIUsageStatus(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  companyId: number
+) {
+  const [
+    subscriptionResult,
+    featureResult,
+    usageResult,
+  ] = await Promise.all([
+    supabase.rpc("current_company_subscription"),
+    supabase.rpc("get_effective_company_feature", {
+      p_feature_key: AI_FEATURE_KEY,
+      p_company_id: companyId,
+    }),
+    supabase.rpc("get_company_feature_usage", {
+      p_feature_key: AI_FEATURE_KEY,
+      p_company_id: companyId,
+    }),
+  ]);
+
+  if (
+    subscriptionResult.error ||
+    featureResult.error ||
+    usageResult.error
+  ) {
+    console.error("[business360-ai-usage]", {
+      subscription: subscriptionResult.error,
+      feature: featureResult.error,
+      usage: usageResult.error,
+    });
+
+    throw new Error("Could not load AI entitlement.");
+  }
+
+  const subscription = Array.isArray(subscriptionResult.data)
+    ? subscriptionResult.data[0]
+    : subscriptionResult.data;
+
+  const feature = Array.isArray(featureResult.data)
+    ? featureResult.data[0]
+    : featureResult.data;
+
+  const usage = Array.isArray(usageResult.data)
+    ? usageResult.data[0]
+    : usageResult.data;
+
+  const used = Number(usage?.usage_count || 0);
+  const limit =
+    feature?.limit_integer == null
+      ? null
+      : Number(feature.limit_integer);
+
+  return {
+    plan:
+      subscription?.plan_name ||
+      subscription?.plan_key ||
+      "Free",
+    status: subscription?.status || "active",
+    enabled: feature?.enabled !== false,
+    used,
+    limit,
+    remaining:
+      limit == null
+        ? null
+        : Math.max(limit - used, 0),
+    resetAt:
+      usage?.period_end || null,
+  };
+}
+
+async function releaseReservation(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  companyId: number
+) {
+  const { error } = await supabase.rpc(
+    "decrement_company_feature_usage",
+    {
+      p_feature_key: AI_FEATURE_KEY,
+      p_decrement: 1,
+      p_company_id: companyId,
+    }
+  );
+
+  if (error) {
+    console.error("[business360-ai-release]", error);
   }
 }
 
