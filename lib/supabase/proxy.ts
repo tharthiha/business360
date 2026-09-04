@@ -79,7 +79,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (isPublic || isSelfAuthorizedApi) {
+  if (isPublic) {
     return supabaseResponse;
   }
 
@@ -142,14 +142,29 @@ export async function updateSession(request: NextRequest) {
     ? platformRows[0]
     : platformRows;
 
-  if (
-    platformStatus?.is_suspended === true &&
-    pathname !== "/auth/company-suspended"
-  ) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/auth/company-suspended";
-    url.search = "";
-    return NextResponse.redirect(url);
+  if (platformStatus?.is_suspended === true) {
+    if (isSelfAuthorizedApi || pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        {
+          error: "Company access is suspended.",
+          code: "COMPANY_SUSPENDED",
+        },
+        { status: 403 }
+      );
+    }
+
+    if (pathname !== "/auth/company-suspended") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/auth/company-suspended";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+
+    return supabaseResponse;
+  }
+
+  if (isSelfAuthorizedApi) {
+    return supabaseResponse;
   }
 
   if (isOnboarding) {
