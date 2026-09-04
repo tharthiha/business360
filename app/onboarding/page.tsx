@@ -3,7 +3,7 @@ import { Suspense } from "react";
 
 import { createClient } from "@/lib/supabase/server";
 
-import { completeOnboarding } from "./actions";
+import OnboardingForm from "./onboarding-form";
 
 type OnboardingSearchParams = Promise<{ error?: string }>;
 
@@ -13,11 +13,24 @@ export default function OnboardingPage({
   searchParams: OnboardingSearchParams;
 }) {
   return (
-    <main className="min-h-screen bg-gray-50 px-4 py-12">
-      <div className="mx-auto w-full max-w-2xl">
-        <Brand />
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#eef2ff,_#f8fafc_42%,_#f8fafc)] px-4 py-10 sm:py-16">
+      <div className="mx-auto w-full max-w-4xl">
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <div className="text-xl font-semibold tracking-tight text-slate-950">
+              Business360
+            </div>
+            <div className="mt-1 text-sm text-slate-500">
+              Business Operating System
+            </div>
+          </div>
 
-        <Suspense fallback={<OnboardingCardFallback />}>
+          <div className="hidden rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-500 shadow-sm sm:block">
+            by NetVilla
+          </div>
+        </div>
+
+        <Suspense fallback={<OnboardingFallback />}>
           <OnboardingContent searchParams={searchParams} />
         </Suspense>
       </div>
@@ -62,186 +75,69 @@ async function OnboardingContent({
     String(user.user_metadata?.full_name || "").trim();
 
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-      <div className="mb-7">
-        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-          Company Setup
+    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60">
+      <div className="grid lg:grid-cols-[0.9fr_1.45fr]">
+        <aside className="bg-gradient-to-br from-indigo-700 via-indigo-600 to-violet-600 p-8 text-white lg:p-10">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-100">
+            Company setup
+          </div>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight">
+            Create your Business360 workspace.
+          </h1>
+          <p className="mt-4 text-sm leading-7 text-indigo-100">
+            Set the company basics once. You can refine tax, documents,
+            accounting and team settings after setup.
+          </p>
+
+          <div className="mt-8 space-y-4">
+            {[
+              ["1", "Company profile", "Name, country, currency and timezone"],
+              ["2", "Owner access", "Your verified account becomes the Owner"],
+              ["3", "Free plan", "Start immediately with backend-controlled limits"],
+            ].map(([number, title, description]) => (
+              <div key={number} className="flex gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold ring-1 ring-white/20">
+                  {number}
+                </div>
+                <div>
+                  <div className="text-sm font-semibold">{title}</div>
+                  <div className="mt-0.5 text-xs leading-5 text-indigo-100">
+                    {description}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        <div className="p-7 sm:p-9 lg:p-10">
+          <div className="mb-7">
+            <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
+              Welcome to Business360
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+              Tell us about your company
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              These defaults will be used across documents, reporting and dates.
+            </p>
+          </div>
+
+          {error && (
+            <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          <OnboardingForm fullName={fullName} />
         </div>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-gray-900">
-          Create your company workspace
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-gray-500">
-          Your account will become the company Owner and start on the
-          Business360 Free plan. Plan limits can be changed later from the
-          NetVilla platform controls.
-        </p>
       </div>
-
-      {error && (
-        <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      <form action={completeOnboarding} className="space-y-5">
-        <div>
-          <label
-            htmlFor="full_name"
-            className="mb-1.5 block text-sm font-medium text-gray-700"
-          >
-            Your name
-          </label>
-          <input
-            id="full_name"
-            name="full_name"
-            type="text"
-            required
-            defaultValue={fullName}
-            autoComplete="name"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-gray-900"
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="company_name"
-            className="mb-1.5 block text-sm font-medium text-gray-700"
-          >
-            Company name
-          </label>
-          <input
-            id="company_name"
-            name="company_name"
-            type="text"
-            required
-            autoComplete="organization"
-            placeholder="Your company"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-gray-900"
-          />
-        </div>
-
-        <div className="grid gap-5 md:grid-cols-3">
-          <div>
-            <label
-              htmlFor="country_code"
-              className="mb-1.5 block text-sm font-medium text-gray-700"
-            >
-              Country
-            </label>
-            <select
-              id="country_code"
-              name="country_code"
-              defaultValue="TH"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-gray-900"
-            >
-              <option value="TH">Thailand</option>
-              <option value="MM">Myanmar</option>
-              <option value="SG">Singapore</option>
-              <option value="MY">Malaysia</option>
-              <option value="VN">Vietnam</option>
-              <option value="US">United States</option>
-              <option value="GB">United Kingdom</option>
-              <option value="AU">Australia</option>
-            </select>
-          </div>
-
-          <div>
-            <label
-              htmlFor="default_currency"
-              className="mb-1.5 block text-sm font-medium text-gray-700"
-            >
-              Currency
-            </label>
-            <select
-              id="default_currency"
-              name="default_currency"
-              defaultValue="THB"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-gray-900"
-            >
-              <option value="THB">THB</option>
-              <option value="MMK">MMK</option>
-              <option value="USD">USD</option>
-              <option value="SGD">SGD</option>
-              <option value="MYR">MYR</option>
-              <option value="VND">VND</option>
-              <option value="GBP">GBP</option>
-              <option value="AUD">AUD</option>
-            </select>
-          </div>
-
-          <div>
-            <label
-              htmlFor="timezone"
-              className="mb-1.5 block text-sm font-medium text-gray-700"
-            >
-              Timezone
-            </label>
-            <select
-              id="timezone"
-              name="timezone"
-              defaultValue="Asia/Bangkok"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-gray-900"
-            >
-              <option value="Asia/Bangkok">Bangkok</option>
-              <option value="Asia/Yangon">Yangon</option>
-              <option value="Asia/Singapore">Singapore</option>
-              <option value="Asia/Kuala_Lumpur">Kuala Lumpur</option>
-              <option value="Asia/Ho_Chi_Minh">Ho Chi Minh City</option>
-              <option value="UTC">UTC</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-          <div className="text-sm font-medium text-gray-900">
-            Starting plan: Free
-          </div>
-          <div className="mt-1 text-sm leading-6 text-gray-500">
-            No payment is required now. Usage limits are controlled from the
-            Business360 plan system and can be upgraded later.
-          </div>
-        </div>
-
-        <button
-          type="submit"
-          className="w-full rounded-lg bg-gray-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-gray-800"
-        >
-          Create Company & Continue
-        </button>
-      </form>
-    </div>
+    </section>
   );
 }
 
-function Brand() {
+function OnboardingFallback() {
   return (
-    <div className="mb-8">
-      <div className="text-xl font-semibold tracking-tight text-gray-900">
-        Business360
-      </div>
-      <div className="mt-1 text-sm text-gray-500">
-        Business Operating System
-      </div>
-    </div>
-  );
-}
-
-function OnboardingCardFallback() {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-      <div className="h-3 w-28 animate-pulse rounded bg-gray-100" />
-      <div className="mt-3 h-8 w-80 max-w-full animate-pulse rounded bg-gray-100" />
-      <div className="mt-3 h-4 w-full animate-pulse rounded bg-gray-100" />
-      <div className="mt-2 h-4 w-4/5 animate-pulse rounded bg-gray-100" />
-      <div className="mt-8 space-y-5">
-        <div className="h-11 animate-pulse rounded-lg bg-gray-100" />
-        <div className="h-11 animate-pulse rounded-lg bg-gray-100" />
-        <div className="grid gap-5 md:grid-cols-3">
-          <div className="h-11 animate-pulse rounded-lg bg-gray-100" />
-          <div className="h-11 animate-pulse rounded-lg bg-gray-100" />
-          <div className="h-11 animate-pulse rounded-lg bg-gray-100" />
-        </div>
-      </div>
-    </div>
+    <div className="h-[560px] animate-pulse rounded-3xl border border-slate-200 bg-white shadow-sm" />
   );
 }
