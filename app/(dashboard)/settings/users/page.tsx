@@ -639,16 +639,16 @@ export default function UsersRolesPage() {
       </section>
 
       {message && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {message}
-        </div>
-      )}
+  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+    {message}
+  </div>
+)}
 
-      {successMessage && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-          {successMessage}
-        </div>
-      )}
+{successMessage && (
+  <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+    {successMessage}
+  </div>
+)}
     </div>
   );
 }
